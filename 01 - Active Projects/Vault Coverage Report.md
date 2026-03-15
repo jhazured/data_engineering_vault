@@ -187,12 +187,15 @@ data_engineering_vault/
 | Section | Rating | Strengths | Gaps / Notes |
 |---------|:------:|-----------|--------------|
 | **1. Templates & Patterns** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;Templates | 7/10 | 12 reusable patterns with code, AWS/Snowflake/dbt reference architecture, ETL templates | Could add Azure/GCP reference architectures |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - Common Patterns | 7/10 | 12 reusable DE patterns with code examples and decision matrix | Comprehensive; covers the essentials |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - ETL vs ELT Workflows | 7/10 | Pipeline templates, YAML config patterns | Could expand with more real-world examples |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - Reference Architectures | 7/10 | AWS/Snowflake/dbt end-to-end architecture with Terraform, Lambda, Step Functions | Could add Azure/GCP reference architectures |
 | **2. Cloud Platforms** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - AWS | 7/10 | Comprehensive service overview, exam-aligned | No hands-on project pattern (cf. Azure ADF note) |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Azure | 9/10 | Fabric T0-T5 architecture, ADF project patterns, hash merge SCD2, pagination | Most complete cloud section |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - GCP | 7/10 | Service overview, Ansible/Terraform integration | No GCP-specific project pattern |
 | **3. Data Engineering Core** | | | |
+| &nbsp;&nbsp;&nbsp;&nbsp;Data Engineering Lifecycle | 8/10 | End-to-end framework (Reis & Housley), technology selection matrix | Good foundational overview |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - Ingestion | 8/10 | 3 notes covering batch, incremental, document ingestion | Solid; CDC could be expanded beyond Common Patterns |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Query & Analysis | 7/10 | RAG patterns, vector embeddings | Niche (Snowflake Cortex-specific) |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - Storage | 9/10 | Distributed systems, Hadoop/MapReduce, multi-tier, open table formats | Iceberg/Hudi coverage is brief |
@@ -202,12 +205,16 @@ data_engineering_vault/
 | &nbsp;&nbsp;&nbsp;&nbsp;G - Security | 7/10 | Snowflake RBAC, trust stores/TLS | No platform-agnostic IAM patterns |
 | &nbsp;&nbsp;&nbsp;&nbsp;H - Cataloguing | 8/10 | DataHub, Unity Catalog, OpenMetadata, decision matrix | Well-rounded |
 | **4. Data Streaming** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;Streaming | 7/10 | Kafka fundamentals, event-driven, stream theory | No Kinesis/Pub-Sub dedicated notes |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - Publish-Subscribe | 7/10 | Stream processing theory | Conceptual; could add hands-on examples |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - Apache Kafka | 8/10 | Kafka fundamentals, architecture, consumers/producers | Solid foundation |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - Event-Driven Architecture | 7/10 | Patterns, CQRS, event sourcing | No Kinesis/Pub-Sub dedicated notes |
 | **5. Data Engineering Platforms** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - dbt | 9/10 | 5 notes: fundamentals through advanced/cost optimisation | Deep; well cross-linked |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Snowflake | 9/10 | SnowPro guide, Cortex AI, troubleshooting, native dbt | Interview + platform + operational |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - Databricks | 9/10 | Platform + modern 2025 patterns (DLT, Unity Catalog) | Strong after recent expansion |
-| &nbsp;&nbsp;&nbsp;&nbsp;D-F - Informatica/Matillion/Dataiku | 6/10 | Comprehensive single-note references each | Adequate but not deep; vendor-specific |
+| &nbsp;&nbsp;&nbsp;&nbsp;D - Informatica | 6/10 | Comprehensive single-note reference | Adequate but not deep |
+| &nbsp;&nbsp;&nbsp;&nbsp;E - Matillion | 6/10 | Comprehensive single-note reference | Adequate but not deep |
+| &nbsp;&nbsp;&nbsp;&nbsp;F - Dataiku | 6/10 | Comprehensive single-note reference | Adequate but not deep |
 | &nbsp;&nbsp;&nbsp;&nbsp;G - DuckDB | 7/10 | Architecture, Python/dbt integration, CI/CD, limitations | Single note; could expand with recipes |
 | **6. Programming Languages** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - Bash | 5/10 | Deployment patterns, Makefile | Thin; no scripting fundamentals deep dive |
@@ -215,13 +222,26 @@ data_engineering_vault/
 | &nbsp;&nbsp;&nbsp;&nbsp;C - Python | 7/10 | Core patterns, pandas/Polars, pytest, Streamlit | No advanced Python (decorators, generators, asyncio) |
 | &nbsp;&nbsp;&nbsp;&nbsp;D - SQL | 8/10 | 8 files: CTEs, window functions, optimisation, Snowflake pipelines | Could add QUALIFY, LATERAL, JSON functions |
 | **7. DevOps & Orchestration** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;DevOps | 8/10 | Docker, K8s, Terraform, Ansible, Jenkins, CI/CD (3), Airflow (2), MCP | Broad and practical |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - Ansible | 7/10 | Playbooks, roles, GCP integration | Single note; adequate |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - Docker | 8/10 | Container patterns + Kubernetes for data workloads | 2 solid notes |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - Jenkins | 7/10 | Pipeline patterns, shared Groovy libraries | Single note; adequate |
+| &nbsp;&nbsp;&nbsp;&nbsp;D - Terraform | 8/10 | Modules, GCP networking/compute/IAM/monitoring | Well-expanded |
+| &nbsp;&nbsp;&nbsp;&nbsp;E - API Management | 7/10 | Model Context Protocol (MCP) | Niche but useful |
+| &nbsp;&nbsp;&nbsp;&nbsp;F - CI/CD Patterns | 8/10 | GitHub Actions, GitLab CI, Snowflake deployment | 3 notes; good breadth |
+| &nbsp;&nbsp;&nbsp;&nbsp;G - Orchestration | 9/10 | Airflow overview + deep dive (548 lines), Dagster/Prefect comparison | Was biggest gap; now strong |
 | **8. Data Modelling** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;Data Modelling | 7/10 | Kimball, Data Vault 2.0, star schema, DFD, sequence diagrams | No normalisation theory or graph modelling |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - ERDs | 8/10 | Kimball, Data Vault 2.0, star schema implementation | Core patterns covered |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - Data Flow Diagrams | 6/10 | DFD fundamentals | Single note; could expand |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - Sequence Diagrams | 6/10 | Sequence diagram fundamentals | Single note; could expand |
 | **9. Protocols** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;Protocols | 7/10 | REST (comprehensive), SOAP (comprehensive), gRPC & GraphQL | SFTP is a stub |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - REST | 9/10 | Comprehensive: CRUD, OAuth 2.0, Azure AD, pagination, response codes | Excellent depth |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - SOAP | 8/10 | WSDL, namespaces, Postman setup, complex examples | Solid |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - SFTP | 3/10 | GoAnywhere MFT stub | Needs expansion or removal |
+| &nbsp;&nbsp;&nbsp;&nbsp;D - gRPC & GraphQL | 8/10 | Both protocols, Protobuf, code examples, decision matrix vs REST | Good balanced coverage |
 | **10. Learning Resources** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;Learning Resources | 9/10 | 7 interview/cert guides, best practices, cheat sheets | Exceptional for interview prep |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - Interview Guides | 9/10 | 7 guides: Snowflake, SQL, PySpark, dbt, AWS DEA, Databricks, DP-600 | Exceptional for interview prep |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - Best Practices | 7/10 | Cross-cutting DE best practices | Single note; could expand per domain |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - Cheat Sheets | 6/10 | Quick reference cards | Single note; could add per-tool sheets |
 
 **Vault Average: 7.8/10**
 
