@@ -131,3 +131,156 @@ flowchart LR
     T2 -->|snapshots| T2
     T3 -->|audit| T0[T0 Control]
 ```
+
+## DFD Notation Systems
+
+Two dominant notation standards exist. Both express the same semantics but differ visually.
+
+### Gane-Sarson vs Yourdon-DeMarco
+
+| Element | Gane-Sarson | Yourdon-DeMarco |
+|---------|------------|-----------------|
+| **Process** | Rounded rectangle with ID stripe at top | Circle |
+| **Data Store** | Open-ended rectangle with ID on left | Two parallel lines with label between |
+| **External Entity** | Square / rectangle | Square / rectangle (same) |
+| **Data Flow** | Labelled arrow | Labelled arrow (same) |
+
+Gane-Sarson is more common in enterprise and data engineering contexts because the rounded rectangles give more room for descriptive labels. Yourdon-DeMarco is favoured in academic settings and software engineering textbooks.
+
+> [!tip] Practical Choice
+> For data engineering documentation, Gane-Sarson notation tends to be clearer — the rectangular process shapes accommodate longer names like "Fivetran Incremental Sync" or "dbt Staging Transform" more comfortably than circles.
+
+## Batch ETL Pipeline DFD
+
+A classic extract-transform-load pipeline expressed as a DFD:
+
+```mermaid
+flowchart LR
+    ERP[(ERP Database)] -->|full extract| E[Extract]
+    CRM[(CRM API)] -->|incremental pull| E
+    E -->|raw JSON/CSV| STG[(Staging Area)]
+    STG -->|staged rows| T[Transform & Cleanse]
+    T -->|conformed dims/facts| DW[(Data Warehouse)]
+    DW -->|curated tables| BI[BI / Reporting]
+    T -->|rejected rows| DQ[(Data Quality Log)]
+```
+
+Key points:
+- The **Extract** process has two external entity sources (ERP, CRM) — each flow is labelled with its extraction strategy
+- **Rejected rows** branch to a data quality log — never silently discard data
+- The **Staging Area** acts as a buffer data store between extract and transform
+
+## Streaming Pipeline DFD
+
+Streaming architectures follow a different pattern — continuous data flow with no batch boundaries:
+
+```mermaid
+flowchart LR
+    IoT[IoT Devices] -->|sensor readings| P[Producer Service]
+    P -->|serialised events| K[(Kafka Topic)]
+    K -->|event stream| C[Consumer / Processor]
+    C -->|enriched events| DB[(Analytics DB)]
+    C -->|alerts| Alert[Alerting Service]
+    K -->|replay / audit| S3[(Object Storage)]
+```
+
+Notable differences from batch DFDs:
+- The **broker** (Kafka topic) is a data store, not a process — it holds data at rest, even if briefly
+- **Multiple consumers** can read from the same topic independently
+- **Object storage** as a secondary sink enables replay and audit
+
+## Medallion Architecture DFD
+
+The [[Data Flow Diagrams|medallion pattern]] (bronze/silver/gold) maps naturally to DFD levels:
+
+```mermaid
+flowchart LR
+    SRC[Source Systems] -->|raw ingestion| B[(Bronze Layer)]
+    B -->|deduplication, typing| S[(Silver Layer)]
+    S -->|business rules, aggregation| G[(Gold Layer)]
+    G -->|governed datasets| Consumers[Data Consumers]
+    B -->|schema drift alerts| MON[Monitoring]
+    S -->|quality test results| MON
+```
+
+| Medallion Layer | DFD Role | Typical Contents |
+|----------------|----------|-----------------|
+| **Bronze** | Data store (raw) | Append-only, source-faithful, minimal transformation |
+| **Silver** | Data store (cleansed) | Deduplicated, typed, validated, conformed |
+| **Gold** | Data store (curated) | Business-level aggregations, dimension/fact tables |
+
+Each transition between layers is a **process** — the DFD makes explicit what transformations occur at each boundary.
+
+## Mermaid DFD Patterns for Obsidian
+
+Mermaid's `flowchart` directive is the best fit for DFDs in Obsidian. Some useful patterns:
+
+### Subgraphs for System Boundaries
+
+```mermaid
+flowchart TB
+    subgraph External
+        API[Partner API]
+        SFTP[SFTP Server]
+    end
+
+    subgraph Platform [Data Platform]
+        ING[Ingestion] --> STG[(Staging)]
+        STG --> TRN[Transform]
+        TRN --> DW[(Warehouse)]
+    end
+
+    subgraph Consumers
+        BI[Tableau]
+        ML[ML Service]
+    end
+
+    API -->|JSON payloads| ING
+    SFTP -->|CSV files| ING
+    DW -->|curated tables| BI
+    DW -->|feature tables| ML
+```
+
+### Bidirectional Flows
+
+```mermaid
+flowchart LR
+    App[Application] <-->|read/write| Cache[(Redis Cache)]
+    Cache -->|cache miss| DB[(PostgreSQL)]
+    DB -->|CDC stream| Kafka[(Kafka)]
+    Kafka -->|materialised| DW[(Warehouse)]
+```
+
+> [!info] Mermaid Limitations
+> Mermaid does not natively support Gane-Sarson or Yourdon-DeMarco shapes. Use `[( )]` for data stores (cylinder), `[ ]` for processes (rectangle), and subgraphs for system boundaries. The semantics are preserved even if the exact notation differs.
+
+## Common DFD Mistakes
+
+| Mistake | Why It Matters | Fix |
+|---------|---------------|-----|
+| **Crossing levels** — showing Level 2 detail inside a Level 0 diagram | Overwhelms readers, defeats the purpose of decomposition | Keep each diagram at one level; reference child diagrams by process number |
+| **Missing data stores** — arrows going directly between processes | Implies synchronous coupling that may not exist; hides where data rests | Add intermediate stores (staging tables, queues, files) |
+| **Unlabelled flows** — arrows with no description | Reader cannot tell *what* data moves, only *that* something moves | Always label with the data content: "order records", "daily aggregates" |
+| **Data stores communicating directly** — arrow from one store to another | Violates DFD rules; data cannot move without a process acting on it | Insert the process that reads from one store and writes to another |
+| **Too many processes at one level** — more than 7-9 processes | Exceeds cognitive load; diagram becomes unreadable | Decompose into a child level diagram |
+| **Forgetting error/reject flows** — only showing the happy path | Hides where data can be lost or corrupted | Add flows for rejected rows, dead-letter queues, error logs |
+
+## DFDs vs Sequence Diagrams vs Architecture Diagrams
+
+Each diagram type serves a different purpose. Choosing the wrong one leads to confusion or wasted effort.
+
+| Aspect | DFD | [[Sequence Diagrams|Sequence Diagram]] | Architecture Diagram |
+|--------|-----|------------------|----------------------|
+| **Shows** | What data flows where | Order of interactions over time | System components and their relationships |
+| **Axis** | No time axis — spatial layout | Vertical time axis | No time axis — spatial layout |
+| **Best for** | Pipeline design, data lineage, stakeholder communication | API flows, debugging multi-step processes, protocol documentation | Infrastructure overview, deployment topology, technology choices |
+| **Granularity** | Adjustable via levels (0/1/2) | Single level of detail | Usually one level |
+| **Weakness** | Does not show ordering or timing | Does not show data at rest or storage | Does not show data content or flow detail |
+
+### Decision Guide
+
+- **"Where does the data go?"** — use a DFD
+- **"In what order do the components talk?"** — use a [[Sequence Diagrams|sequence diagram]]
+- **"What infrastructure do we need?"** — use an architecture diagram
+- **"What transforms the data at each step?"** — use a DFD (Level 2)
+- **"What happens when the API call fails?"** — use a [[Sequence Diagrams|sequence diagram]] with alt fragments

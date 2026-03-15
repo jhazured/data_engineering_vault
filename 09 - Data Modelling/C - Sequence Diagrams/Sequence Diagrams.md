@@ -199,3 +199,261 @@ sequenceDiagram
 | **swimlanes.io** | Text-based, web | Quick browser-based diagrams |
 
 Mermaid is recommended for this vault — renders natively in Obsidian.
+
+## Notation Deep Dive
+
+### Actors and Participants
+
+In Mermaid sequence diagrams, `participant` creates a box and `actor` creates a stick figure. Use `actor` for human roles and `participant` for system components:
+
+```mermaid
+sequenceDiagram
+    actor Analyst as Data Analyst
+    participant API as REST API
+    participant DW as Snowflake
+    Analyst->>API: Request dataset
+    API->>DW: SELECT * FROM gold.report
+    DW-->>API: Result set
+    API-->>Analyst: JSON response
+```
+
+### Synchronous vs Asynchronous Messages
+
+| Syntax | Rendering | Semantics |
+|--------|-----------|-----------|
+| `->>` | Solid line, filled arrowhead | Synchronous — caller blocks until response |
+| `-->>` | Dashed line, filled arrowhead | Return / response message |
+| `-)` | Solid line, open arrowhead | Asynchronous — fire and forget |
+| `--)` | Dashed line, open arrowhead | Async response / callback |
+
+Asynchronous messages are critical for modelling event-driven and streaming architectures where the producer does not wait for the consumer.
+
+### Activation Bars
+
+Activation bars (the narrow rectangles on lifelines) show when a participant is actively processing. Use `activate` / `deactivate` or the shorthand `+` / `-` syntax:
+
+```
+Caller->>+Service: request
+Service-->>-Caller: response
+```
+
+### Combined Fragments
+
+| Fragment | Purpose | Data Engineering Use Case |
+|----------|---------|--------------------------|
+| `alt` / `else` | Conditional branching | Incremental vs full load decision |
+| `opt` | Optional execution | Skip processing if no new data |
+| `loop` | Repeated execution | Paginated API calls, batch iteration |
+| `par` / `and` | Parallel execution | Concurrent pipeline stages |
+| `critical` | Atomic section | Transaction boundaries |
+| `break` | Exit early | Circuit breaker tripped |
+
+## REST API Pagination Flow
+
+A common data engineering pattern — extracting all pages from a paginated API:
+
+```mermaid
+sequenceDiagram
+    participant Ingest as Ingestion Script
+    participant API as REST API
+    participant S3 as S3 Bucket
+
+    Ingest->>API: GET /records?page=1&limit=500
+    activate API
+    API-->>Ingest: 200 OK {data, next_page: 2, total_pages: 47}
+    deactivate API
+    Ingest->>S3: PUT page_1.json
+
+    loop While next_page exists
+        Ingest->>API: GET /records?page=N&limit=500
+        activate API
+        API-->>Ingest: 200 OK {data, next_page}
+        deactivate API
+        Ingest->>S3: PUT page_N.json
+
+        opt Rate limit hit (429)
+            Ingest->>Ingest: Backoff (exponential delay)
+        end
+    end
+
+    Ingest->>Ingest: Log extraction complete (pages, row count)
+```
+
+Key details this diagram captures:
+- The **loop fragment** makes the pagination strategy explicit
+- The **opt fragment** documents rate-limit handling without cluttering the main flow
+- Raw files land in **S3** before any transformation — separation of concerns
+
+## dbt Run Orchestration Flow
+
+How an orchestrator coordinates a full dbt pipeline run with logging:
+
+```mermaid
+sequenceDiagram
+    participant Sched as Airflow Scheduler
+    participant Worker as Airflow Worker
+    participant dbt as dbt Core
+    participant SF as Snowflake
+    participant Log as T0 Pipeline Log
+
+    Sched->>Worker: Trigger DAG run
+    activate Worker
+
+    Worker->>dbt: dbt source freshness
+    activate dbt
+    dbt->>SF: SELECT MAX(_loaded_at) FROM sources
+    SF-->>dbt: freshness results
+    deactivate dbt
+
+    alt Sources are fresh
+        Worker->>dbt: dbt run --select staging+
+        activate dbt
+        dbt->>SF: CREATE OR REPLACE TABLE stg_*
+        SF-->>dbt: success
+        dbt->>SF: MERGE INTO dim_* / fact_*
+        SF-->>dbt: rows affected
+        deactivate dbt
+
+        Worker->>dbt: dbt test --select staging+
+        activate dbt
+        dbt->>SF: Run assertions (not_null, unique, relationships)
+        SF-->>dbt: test results
+        dbt-->>Worker: pass / fail summary
+        deactivate dbt
+
+        Worker->>Log: INSERT run metadata (status, duration, row counts)
+    else Sources are stale
+        Worker->>Log: INSERT stale source alert
+        Worker-)Sched: Mark DAG as skipped
+    end
+
+    deactivate Worker
+```
+
+## Kafka Producer-Consumer Flow
+
+Modelling asynchronous message passing through a broker:
+
+```mermaid
+sequenceDiagram
+    participant App as Application Service
+    participant Prod as Kafka Producer
+    participant Broker as Kafka Broker
+    participant CG as Consumer Group
+    participant DB as Analytics Database
+
+    App-)Prod: Emit domain event (async)
+    activate Prod
+    Prod->>Broker: Produce to topic (key, value, headers)
+    Broker-->>Prod: ACK (offset assigned)
+    deactivate Prod
+
+    Note over Broker: Message persisted to partition log
+
+    Broker-)CG: Poll returns batch of messages
+    activate CG
+    CG->>CG: Deserialise and validate schema
+    alt Valid message
+        CG->>DB: INSERT INTO events table
+        DB-->>CG: Committed
+        CG->>Broker: Commit offset
+    else Schema validation failure
+        CG->>Broker: Produce to dead-letter topic
+        CG->>Broker: Commit offset (skip poison pill)
+    end
+    deactivate CG
+```
+
+Notable modelling choices:
+- The initial `App-)Prod` uses an **async arrow** — the application does not wait for Kafka acknowledgement
+- The **dead-letter topic** pattern is shown via the `alt` fragment — critical for production pipelines
+- **Offset commits** are explicit — this documents the at-least-once delivery guarantee
+
+## CI/CD Deployment Flow
+
+A typical data engineering CI/CD pipeline from git push to production:
+
+```mermaid
+sequenceDiagram
+    actor Dev as Developer
+    participant Git as GitLab
+    participant CI as CI Runner
+    participant Lint as sqlfluff
+    participant dbt as dbt
+    participant SF as Snowflake CI Schema
+    participant Prod as Snowflake Production
+    participant Slack as Slack
+
+    Dev->>Git: git push (feature branch)
+    Git-)CI: Webhook trigger
+    activate CI
+
+    par Static Checks
+        CI->>Lint: sqlfluff lint models/
+        Lint-->>CI: Lint results
+    and
+        CI->>dbt: dbt compile --target ci
+        dbt-->>CI: Compilation check
+    end
+
+    alt Lint or compile fails
+        CI-->>Git: Pipeline failed
+        CI-)Slack: Notify: build failed
+    else All checks pass
+        CI->>dbt: dbt run --target ci
+        activate dbt
+        dbt->>SF: Build models in CI schema
+        SF-->>dbt: Success
+        deactivate dbt
+
+        CI->>dbt: dbt test --target ci
+        activate dbt
+        dbt->>SF: Run test suite
+        SF-->>dbt: All tests pass
+        deactivate dbt
+
+        CI-->>Git: Pipeline passed (ready for merge)
+    end
+
+    deactivate CI
+
+    Note over Dev,Git: After merge to main
+
+    Git-)CI: Merge trigger (main branch)
+    activate CI
+    CI->>dbt: dbt run --target prod
+    activate dbt
+    dbt->>Prod: Deploy models to production
+    Prod-->>dbt: Success
+    deactivate dbt
+    CI-)Slack: Notify: deployment complete
+    deactivate CI
+```
+
+## When to Use Sequence Diagrams in Data Engineering
+
+Sequence diagrams excel in specific documentation scenarios. Choosing the right diagram type saves time and improves clarity.
+
+### Strong Use Cases
+
+| Scenario | Why Sequence Diagrams Work |
+|----------|---------------------------|
+| **API integration documentation** | Shows the exact request/response handshake, authentication flow, pagination, and error handling in order |
+| **Troubleshooting production incidents** | Trace the timeline of what called what, when, and what failed — invaluable during post-mortems |
+| **Onboarding new team members** | Multi-step orchestration flows (Airflow DAGs, CI/CD pipelines) are far clearer as sequences than as prose |
+| **Contract negotiation with external teams** | Agree on interaction protocol before writing code — the diagram becomes the specification |
+| **Async architecture documentation** | Kafka/pub-sub flows need the temporal ordering that [[Data Flow Diagrams|DFDs]] cannot express |
+
+### When Not to Use Them
+
+- **Data lineage** — use a [[Data Flow Diagrams|DFD]] instead; sequence diagrams do not show data at rest
+- **Infrastructure topology** — use an architecture diagram; sequence diagrams do not show deployment concerns
+- **Simple single-step operations** — a sequence diagram for "client calls API, gets response" adds no value over prose
+
+### Tips for Effective Sequence Diagrams
+
+1. **Limit participants to 5-7** — more than that and the diagram becomes unreadable; split into multiple diagrams
+2. **Show the error path** — use `alt` fragments to document what happens when things fail, not just the happy path
+3. **Label messages precisely** — "send data" is useless; "POST /api/v2/shipments {manifest_id, items[]}" is useful
+4. **Use activation bars consistently** — they show processing duration and help identify bottlenecks
+5. **Add notes for context** — `Note over` blocks explain *why* something happens without cluttering the message flow
