@@ -196,7 +196,6 @@ data_engineering_vault/
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Azure | 9/10 | Fabric T0-T5 architecture, ADF project patterns, hash merge SCD2, pagination | Most complete cloud section |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - GCP | 7/10 | Service overview, Ansible/Terraform integration | No GCP-specific project pattern |
 | **3. Data Engineering Core** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;I - Lifecycle | 8/10 | End-to-end framework (Reis & Housley), technology selection matrix | Good foundational overview |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - Ingestion | 8/10 | 3 notes covering batch, incremental, document ingestion | Solid; CDC could be expanded beyond Common Patterns |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Query & Analysis | 7/10 | RAG patterns, vector embeddings | Niche (Snowflake Cortex-specific) |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - Storage | 9/10 | Distributed systems, Hadoop/MapReduce, multi-tier, open table formats | Iceberg/Hudi coverage is brief |
@@ -205,6 +204,7 @@ data_engineering_vault/
 | &nbsp;&nbsp;&nbsp;&nbsp;F - Monitoring | 7/10 | Pipeline observability, Snowflake cost | Generic; could add Datadog/Grafana patterns |
 | &nbsp;&nbsp;&nbsp;&nbsp;G - Security | 7/10 | Snowflake RBAC, trust stores/TLS | No platform-agnostic IAM patterns |
 | &nbsp;&nbsp;&nbsp;&nbsp;H - Cataloguing | 8/10 | DataHub, Unity Catalog, OpenMetadata, decision matrix | Well-rounded |
+| &nbsp;&nbsp;&nbsp;&nbsp;I - Lifecycle | 8/10 | End-to-end framework (Reis & Housley), technology selection matrix | Good foundational overview |
 | **4. Data Streaming** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - Publish-Subscribe | 7/10 | Stream processing theory | Conceptual; could add hands-on examples |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Apache Kafka | 8/10 | Kafka fundamentals, architecture, consumers/producers | Solid foundation |
