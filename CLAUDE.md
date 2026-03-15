@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-This is an Obsidian knowledge vault — a personal reference library for data engineering topics. It is **not** a software project. There is no build system, test suite, or application code. The content is ~100 markdown files organized into numbered topic folders.
+This is an Obsidian knowledge vault — a personal reference library for data engineering topics. It is **not** a software project. There is no build system, test suite, or application code. The content is ~104 markdown files organized into numbered topic folders.
 
 ## Vault Structure
 
 Notes are organized by numbered prefix into domain areas:
 
 - **01 - Active Projects** — workspace for current initiatives (vault audit, coverage report)
-- **02 - Templates** — ETL pipeline templates & patterns
+- **02 - Templates** — ETL pipeline templates & patterns, reference architectures (AWS/Snowflake/dbt)
 - **03 - Cloud Platforms** — AWS, Azure/Microsoft Fabric, GCP
 - **04 - Data Engineering** — core DE topics: ingestion (3 notes), storage, transformation, testing & quality (2 notes), monitoring & observability (2 notes), security, cataloguing
 - **05 - Data Streaming** — pub/sub, Kafka, event-driven architecture
@@ -20,7 +20,7 @@ Notes are organized by numbered prefix into domain areas:
 - **08 - DevOps & Orchestration** — Ansible, Docker (2 notes), Kubernetes, Jenkins, Terraform (expanded), API management/MCP, CI/CD (3 notes)
 - **09 - Data Modelling** — Kimball, Data Vault 2.0, star schema implementation, data flow diagrams, sequence diagrams
 - **10 - Protocols** — REST, SOAP, SFTP
-- **11 - Learning Resources** — interview guides (4), DP-600 study guide, best practices, cheat sheets
+- **11 - Learning Resources** — interview guides (6 incl. AWS DEA, Databricks), DP-600 study guide, best practices, cheat sheets
 
 ## Obsidian Plugins
 
