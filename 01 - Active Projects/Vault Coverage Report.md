@@ -1,6 +1,6 @@
 # Vault Coverage Report
 
-> Updated 2026-03-15 — 113 markdown files | 70,241 lines
+> Updated 2026-03-15 — 121 markdown files | 78,460 lines
 
 ---
 
@@ -8,16 +8,16 @@
 
 | Area | Files | Lines | Verdict |
 |------|------:|------:|---------|
-| 01 Active Projects | 1 | ~238 | Meta (this report) |
+| 01 Active Projects | 1 | ~372 | Meta (this report) |
 | 02 Templates | 3 | ~1,351 | **Good** — ETL templates, common patterns (12), reference architecture |
-| 03 Cloud Platforms | 4 | ~1,469 | **Solid** — AWS, Azure/Fabric (incl. ADF patterns), GCP |
-| 04 Data Engineering | 20 | ~5,436 | **Excellent** — lifecycle, ingestion (3), storage (incl. Hadoop), transformation (incl. data contracts, data mesh), testing (2), monitoring (2), security (incl. trust stores), cataloguing |
-| 05 Data Streaming | 3 | ~574 | **Solid** — Kafka, stream theory, event-driven architecture |
-| 06 Data Engineering Platforms | 15 | ~5,393 | **Excellent** — dbt (5), Snowflake (4), Databricks (3), Informatica, Matillion, Dataiku, DuckDB |
-| 07 Programming Languages | 36 | ~30,369 | **Deep** — PySpark (26 incl. Spark architecture), Python (6), SQL (8), Bash (1) |
-| 08 DevOps & Orchestration | 11 | ~4,469 | **Strong** — Docker (2), K8s, Terraform, Ansible, Jenkins, CI/CD (3), MCP, Airflow (2) |
-| 09 Data Modelling | 5 | ~1,320 | **Good** — Kimball, Data Vault 2.0, star schema, DFD, sequence diagrams |
-| 10 Protocols | 4 | ~1,500 | **Good** — REST, SOAP, SFTP, gRPC & GraphQL |
+| 03 Cloud Platforms | 4 | ~1,970 | **Strong** — AWS, Azure/Fabric (incl. ADF + hash merge), GCP (incl. BigQuery ETL framework) |
+| 04 Data Engineering | 23 | ~7,780 | **Excellent** — lifecycle, ingestion (3), storage (incl. Hadoop), transformation (data contracts, data mesh, SCD2), testing (2), monitoring (3 incl. reliability + cost), security (4 incl. IAM + compliance), cataloguing |
+| 05 Data Streaming | 5 | ~1,755 | **Strong** — Kafka (incl. Schema Registry + exactly-once), stream theory, event-driven, Snowflake Streams, Flink & Kinesis |
+| 06 Data Engineering Platforms | 16 | ~6,132 | **Excellent** — dbt (5), Snowflake (4), Databricks (3), Informatica, Matillion, Dataiku, DuckDB, Fivetran |
+| 07 Programming Languages | 36 | ~31,335 | **Deep** — PySpark (26), Python (6), SQL (8 incl. LATERAL FLATTEN + QUALIFY), Bash (1, expanded) |
+| 08 DevOps & Orchestration | 12 | ~5,330 | **Excellent** — Docker (2), K8s, Terraform, Ansible, Jenkins, CI/CD (3), MCP, Airflow (2), Dagster & Prefect |
+| 09 Data Modelling | 6 | ~2,286 | **Strong** — Kimball, advanced dimensional patterns, Data Vault 2.0, star schema, DFD, sequence diagrams |
+| 10 Protocols | 4 | ~2,031 | **Strong** — REST, SOAP, SFTP (comprehensive), gRPC & GraphQL |
 | 11 Learning Resources | 9 | ~17,962 | **Excellent** — 6 interview/cert guides + DP-600 + best practices + cheat sheets |
 
 ---
@@ -26,24 +26,25 @@
 
 ```
 ██████████ PySpark              Excellent — 26 files incl. Spark architecture, Delta Lake, cloud integration
-█████████░ Snowflake            Excellent — RBAC, cost, SnowPro guide, Cortex, SQL pipelines
-█████████░ dbt                  Excellent — 5 notes: fundamentals, incremental, macros, tags, advanced/cost
+█████████░ Snowflake            Excellent — RBAC, cost monitoring, SnowPro guide, Cortex, SQL pipelines
+█████████░ dbt                  Excellent — 5 notes: fundamentals, incremental, macros (expanded), tags, advanced/cost
 █████████░ Interview/Cert Prep  Excellent — 6 guides (Snowflake, SQL, PySpark, dbt, AWS DEA, Databricks) + DP-600
-████████░░ Data Engineering     Strong — ingestion, storage, Hadoop, data contracts, data mesh, lifecycle, security
-████████░░ DevOps/Orchestration Strong — Docker (2), K8s, Terraform, Ansible, Jenkins, CI/CD (3), MCP, Airflow (2)
+█████████░ Data Engineering     Excellent — 23 notes: ingestion, storage, transformation, testing, monitoring, security, compliance, cataloguing
+█████████░ DevOps/Orchestration Excellent — Docker, K8s, Terraform, Ansible, Jenkins, CI/CD (3), MCP, Airflow (2), Dagster & Prefect
 ████████░░ Databricks           Strong — 3 notes: platform, modern patterns (2025), exam guide
-███████░░░ Cloud Platforms      Solid — AWS, Azure/Fabric + ADF patterns, GCP
+████████░░ Data Streaming       Strong — Kafka (+ Schema Registry + exactly-once), Snowflake Streams, Flink & Kinesis
+████████░░ Data Modelling       Strong — Kimball, advanced dimensional, Data Vault 2.0, star schema, DFD, sequence diagrams
+████████░░ SQL                  Strong — 8 notes incl. LATERAL FLATTEN, QUALIFY, JSON, execution plans
+███████░░░ Cloud Platforms      Solid — AWS, Azure/Fabric + ADF + hash merge, GCP + BigQuery ETL
 ███████░░░ Templates            Solid — ETL templates, 12 common patterns, reference architecture
-██████░░░░ Data Streaming       Solid — Kafka, event-driven, stream theory
-██████░░░░ SQL                  Good — 8 notes including Snowflake pipeline patterns
-██████░░░░ Data Modelling       Good — Kimball + Data Vault 2.0 + star schema + diagrams
+███████░░░ Protocols            Solid — REST, SOAP, SFTP (comprehensive), gRPC & GraphQL
+███████░░░ Bash                 Solid — deployment patterns + scripting fundamentals (1,487 lines)
 ██████░░░░ Python (non-Spark)   Good — 6 notes including core patterns, pandas/Polars, Streamlit
-██████░░░░ Protocols            Good — REST, SOAP, gRPC & GraphQL; SFTP stub
+██████░░░░ Cheat Sheets         Good — per-tool references for dbt, Snowflake, Docker, Terraform, Git
 █████░░░░░ Informatica          Adequate — comprehensive reference guide
 █████░░░░░ Matillion            Adequate — comprehensive reference guide
 █████░░░░░ Dataiku              Adequate — comprehensive reference guide
 █████░░░░░ DuckDB              Adequate — embedded OLAP, Python/dbt integration, CI/CD
-████░░░░░░ Bash                 Improved — deployment + scripting fundamentals + Makefile
 ```
 
 ---
@@ -194,34 +195,37 @@ data_engineering_vault/
 | **2. Cloud Platforms** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - AWS | 7/10 | Comprehensive service overview, exam-aligned | No hands-on project pattern; missing FinOps, VPC/security |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Azure | 9/10 | Fabric T0-T5, ADF project patterns, hash merge SCD2, pagination | Most complete cloud section |
-| &nbsp;&nbsp;&nbsp;&nbsp;C - GCP | 6/10 | Service overview, Ansible/Terraform integration | Thinnest cloud section; no project pattern or BigQuery deep dive |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - GCP | 8/10 | Service overview, BigQuery ETL framework, Cloud SQL, GCS extraction, transformations | Now includes practical project patterns |
 | **3. Data Engineering Core** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - Ingestion | 8/10 | 3 notes covering batch, incremental, document ingestion | CDC could be expanded; missing Fivetran/Airbyte specifics |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Query & Analysis | 6/10 | RAG patterns, vector embeddings | Niche (Snowflake Cortex-specific); not core DE |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - Storage | 8/10 | Distributed systems, Hadoop/MapReduce, multi-tier, open table formats | Iceberg/Hudi brief; missing lakehouse comparison framework |
 | &nbsp;&nbsp;&nbsp;&nbsp;D - Transformation | 9/10 | Data contracts (Protobuf/Avro/JSON Schema), data mesh (4 principles), SCD2 | Excellent architectural coverage |
 | &nbsp;&nbsp;&nbsp;&nbsp;E - Testing | 8/10 | Quality frameworks + dbt testing | Missing Great Expectations hands-on, data profiling |
-| &nbsp;&nbsp;&nbsp;&nbsp;F - Monitoring | 6/10 | Pipeline observability, Snowflake cost | Snowflake-only cost; missing SLOs, data freshness alerting, Datadog/Grafana |
-| &nbsp;&nbsp;&nbsp;&nbsp;G - Security | 5/10 | Snowflake RBAC, trust stores/TLS | Snowflake-only; missing AWS IAM, Azure RBAC, GCP IAM, masking, retention policies |
+| &nbsp;&nbsp;&nbsp;&nbsp;F - Monitoring | 8/10 | Pipeline observability, cost monitoring (expanded), reliability patterns, SLOs, data freshness | Now 3 notes; comprehensive cross-platform |
+| &nbsp;&nbsp;&nbsp;&nbsp;G - Security | 8/10 | Snowflake RBAC (deep), cross-platform IAM, compliance (GDPR/SOC2/HIPAA/PCI-DSS), trust stores | Now 4 notes; major improvement |
 | &nbsp;&nbsp;&nbsp;&nbsp;H - Cataloguing | 8/10 | DataHub, Unity Catalog, OpenMetadata, decision matrix | Well-rounded |
 | &nbsp;&nbsp;&nbsp;&nbsp;I - Lifecycle | 8/10 | End-to-end framework (Reis & Housley), technology selection matrix | Good foundational overview |
 | **4. Data Streaming** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;A - Publish-Subscribe | 7/10 | Stream processing theory, windowing, watermarks | Conceptual; no hands-on code examples |
-| &nbsp;&nbsp;&nbsp;&nbsp;B - Apache Kafka | 7/10 | Kafka fundamentals, architecture, consumers/producers | Missing Schema Registry, Connect framework, exactly-once semantics |
-| &nbsp;&nbsp;&nbsp;&nbsp;C - Event-Driven Architecture | 7/10 | Event sourcing, CQRS concepts | Kafka-only; no Flink, Kinesis, or Pub/Sub coverage |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - Publish-Subscribe | 7/10 | Stream processing theory, windowing, watermarks | Conceptual; could add more hands-on |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - Apache Kafka | 9/10 | Kafka fundamentals, Schema Registry, exactly-once, producer/consumer reliability, backpressure | Comprehensive after enhancement |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - Event-Driven Architecture | 7/10 | Event sourcing, CQRS concepts | Solid conceptual coverage |
+| &nbsp;&nbsp;&nbsp;&nbsp;D - Snowflake Streams | 8/10 | CDC, real-time alert tasks, task scheduling, stream consumption patterns | Practical production patterns |
+| &nbsp;&nbsp;&nbsp;&nbsp;E - Flink & Kinesis | 8/10 | Flink architecture/checkpointing/CDC, Kinesis streams/firehose/analytics, 4-way comparison | Broad streaming coverage |
 | **5. Data Engineering Platforms** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - dbt | 9/10 | 5 notes: fundamentals through advanced/cost optimisation | Missing dbt Cloud features (scheduling, metadata API) |
-| &nbsp;&nbsp;&nbsp;&nbsp;B - Snowflake | 8/10 | SnowPro guide, Cortex AI, troubleshooting, native dbt | Heavy on cert prep; light on performance tuning (clustering keys, query profile) |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - Snowflake | 9/10 | SnowPro guide, Cortex AI, troubleshooting, native dbt, cost monitoring (expanded) | Comprehensive after cost/monitoring enhancements |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - Databricks | 9/10 | Platform + modern 2025 patterns (DLT, Unity Catalog) | Missing MLflow, Feature Store, AutoML |
 | &nbsp;&nbsp;&nbsp;&nbsp;D - Informatica | 6/10 | Comprehensive single-note reference with positioning | Adequate; lacks hands-on examples |
 | &nbsp;&nbsp;&nbsp;&nbsp;E - Matillion | 6/10 | Comprehensive single-note reference with positioning | Adequate; lacks hands-on examples |
 | &nbsp;&nbsp;&nbsp;&nbsp;F - Dataiku | 6/10 | Comprehensive single-note reference with positioning | Adequate; lacks hands-on examples |
 | &nbsp;&nbsp;&nbsp;&nbsp;G - DuckDB | 7/10 | Architecture, Python/dbt integration, CI/CD, limitations | Single note; could expand with recipes |
+| &nbsp;&nbsp;&nbsp;&nbsp;H - Fivetran | 8/10 | Setup, RBAC, REST API, key-pair auth, cost optimisation, MAR reduction | Production-ready operational guide |
 | **6. Programming Languages** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;A - Bash | 5/10 | Deployment patterns, Makefile | Thin; missing scripting best practices, error handling, log parsing |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - Bash | 8/10 | Deployment patterns, scripting fundamentals, error handling, parameter expansion, log parsing, process management | Comprehensive after expansion (1,487 lines) |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - PySpark | 9/10 | 26 files: architecture through production, MOC, testing (6), troubleshooting | Vault's strongest section; missing MLlib/GraphFrames |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - Python | 7/10 | Core patterns, pandas/Polars, pytest, Streamlit | Missing async patterns, packaging (poetry/uv), type hints |
-| &nbsp;&nbsp;&nbsp;&nbsp;D - SQL | 8/10 | 8 files: CTEs, window functions, optimisation, Snowflake pipelines | Missing QUALIFY, LATERAL, JSON functions, execution plan reading |
+| &nbsp;&nbsp;&nbsp;&nbsp;D - SQL | 9/10 | 8 files: CTEs, window functions, optimisation, Snowflake pipelines, LATERAL FLATTEN, QUALIFY, JSON, execution plans | Comprehensive after advanced SQL expansion |
 | **7. DevOps & Orchestration** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - Ansible | 7/10 | Playbooks, roles, GCP integration | Single note; adequate for DE context |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Docker | 8/10 | Container patterns + Kubernetes for data workloads | Solid; missing Spark-on-K8s detail |
@@ -229,22 +233,22 @@ data_engineering_vault/
 | &nbsp;&nbsp;&nbsp;&nbsp;D - Terraform | 8/10 | Modules, GCP networking/compute/IAM/monitoring | Well-expanded; could add Snowflake/Databricks provider examples |
 | &nbsp;&nbsp;&nbsp;&nbsp;E - API Management | 6/10 | Model Context Protocol (MCP) only | Niche; missing API gateway patterns (Kong, AWS API Gateway) |
 | &nbsp;&nbsp;&nbsp;&nbsp;F - CI/CD Patterns | 8/10 | GitHub Actions, GitLab CI, Snowflake deployment | 3 notes; missing artifact management, blue/green patterns |
-| &nbsp;&nbsp;&nbsp;&nbsp;G - Orchestration | 8/10 | Airflow overview + deep dive (548 lines), Dagster/Prefect comparison | Airflow-deep but alternatives only compared, not covered in detail |
+| &nbsp;&nbsp;&nbsp;&nbsp;G - Orchestration | 9/10 | Airflow (2 notes), Dagster & Prefect (861 lines), 18-dimension comparison, migration patterns | All three major orchestrators now covered in depth |
 | **8. Data Modelling** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;A - ERDs | 8/10 | Kimball, Data Vault 2.0, star schema implementation | Missing Inmon 3NF, fact-less facts, junk dimensions |
-| &nbsp;&nbsp;&nbsp;&nbsp;B - Data Flow Diagrams | 5/10 | DFD fundamentals and levels | Skeleton note; thin on practical application |
-| &nbsp;&nbsp;&nbsp;&nbsp;C - Sequence Diagrams | 5/10 | Sequence diagram fundamentals | Skeleton note; thin on practical application |
+| &nbsp;&nbsp;&nbsp;&nbsp;A - ERDs | 9/10 | Kimball, advanced dimensional (junk/factless/bridge/mini), Data Vault 2.0, star schema, SCD Types 0-7 | Now 4 notes; comprehensive |
+| &nbsp;&nbsp;&nbsp;&nbsp;B - Data Flow Diagrams | 7/10 | DFD notation, levels, Mermaid examples (batch ETL, streaming, medallion), common mistakes | Practical after enhancement |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - Sequence Diagrams | 7/10 | Notation, Mermaid examples (REST pagination, dbt orchestration, Kafka, CI/CD) | Practical after enhancement |
 | **9. Protocols** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - REST | 8/10 | CRUD, OAuth 2.0, Azure AD, pagination, response codes | Missing webhook patterns, API versioning strategies |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - SOAP | 8/10 | WSDL, namespaces, Postman setup, complex examples | Solid for legacy integration reference |
-| &nbsp;&nbsp;&nbsp;&nbsp;C - SFTP | 3/10 | GoAnywhere MFT stub | Needs expansion or removal |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - SFTP | 7/10 | Protocol comparison, paramiko patterns, key management, security best practices, GoAnywhere MFT | Full rewrite from stub (683 lines) |
 | &nbsp;&nbsp;&nbsp;&nbsp;D - gRPC & GraphQL | 7/10 | Both protocols, Protobuf, code examples, decision matrix | Missing federation, schema stitching, streaming depth |
 | **10. Learning Resources** | | | |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - Interview Guides | 8/10 | 7 guides: Snowflake, SQL, PySpark, dbt, AWS DEA, Databricks, DP-600 | Some content duplicated from core notes; cert-heavy, light on system design |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Best Practices | 7/10 | Cross-cutting DE best practices | Single note; could expand per domain |
-| &nbsp;&nbsp;&nbsp;&nbsp;C - Cheat Sheets | 6/10 | Quick reference cards | Single note; could add per-tool sheets |
+| &nbsp;&nbsp;&nbsp;&nbsp;C - Cheat Sheets | 8/10 | Per-tool references for dbt, Snowflake, Docker, Terraform, Git, Python packaging | Expanded to 613 lines |
 
-**Vault Average: 7.1/10**
+**Vault Average: 7.9/10**
 
 ---
 
@@ -293,16 +297,18 @@ data_engineering_vault/
 
 | Metric | Start | Current |
 |--------|-------|---------|
-| Total markdown files | 31 | 113 |
-| Total lines | ~8,000 | 70,241 |
-| Comprehensive files (8+/10) | ~10 | ~70 |
+| Total markdown files | 31 | 121 |
+| Total lines | ~8,000 | 78,460 |
+| Comprehensive files (8+/10) | ~10 | ~85 |
 | Empty critical folders | 9 | 0 |
-| Cloud platform coverage | 0/3 | 3/3 |
-| Data engineering platform coverage | 3/6 | 7/7 (incl. DuckDB) |
-| DevOps tool coverage | 3/6 | 7/7 (incl. Airflow) |
-| Protocol coverage | 2/4 | 4/4 (incl. gRPC/GraphQL) |
+| Cloud platform coverage | 0/3 | 3/3 (all with project patterns) |
+| Data engineering platform coverage | 3/6 | 8/8 (incl. DuckDB, Fivetran) |
+| DevOps tool coverage | 3/6 | 8/8 (incl. Airflow, Dagster, Prefect) |
+| Streaming platform coverage | 1/4 | 4/4 (Kafka, Snowflake Streams, Flink, Kinesis) |
+| Protocol coverage | 2/4 | 4/4 (incl. gRPC/GraphQL, SFTP expanded) |
+| Security & compliance | 1 note | 4 notes (RBAC, IAM, compliance, trust stores) |
 | Interview/cert guides | 4 | 6 + DP-600 |
-| Biggest remaining gap | — | PySpark specialist subfolders |
+| Biggest remaining gap | — | PySpark specialist subfolders (MLOps, Security, GraphFrames) |
 
 ### Source Projects
 
