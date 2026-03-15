@@ -70,7 +70,6 @@ data_engineering_vault/
 │   └── C - GCP/
 │       └── GCP Data Services for Data Engineering.md
 ├── 04 - Data Engineering/
-│   ├── Data Engineering Lifecycle.md
 │   ├── A - Ingestion/
 │   │   ├── Data Ingestion Patterns.md
 │   │   ├── Document Ingestion & Chunking.md
@@ -96,8 +95,10 @@ data_engineering_vault/
 │   ├── G - Security & Governance/
 │   │   ├── Snowflake RBAC & Data Security.md
 │   │   └── Trust Stores & Certificate Management.md
-│   └── H - Data Cataloguing/
-│       └── Data Cataloguing & Discovery.md
+│   ├── H - Data Cataloguing/
+│   │   └── Data Cataloguing & Discovery.md
+│   └── I - Lifecycle/
+│       └── Data Engineering Lifecycle.md
 ├── 05 - Data Streaming/
 │   ├── A - Publish-Subscribe/
 │   │   └── Stream Processing Theory.md
@@ -195,7 +196,7 @@ data_engineering_vault/
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Azure | 9/10 | Fabric T0-T5 architecture, ADF project patterns, hash merge SCD2, pagination | Most complete cloud section |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - GCP | 7/10 | Service overview, Ansible/Terraform integration | No GCP-specific project pattern |
 | **3. Data Engineering Core** | | | |
-| &nbsp;&nbsp;&nbsp;&nbsp;Data Engineering Lifecycle | 8/10 | End-to-end framework (Reis & Housley), technology selection matrix | Good foundational overview |
+| &nbsp;&nbsp;&nbsp;&nbsp;I - Lifecycle | 8/10 | End-to-end framework (Reis & Housley), technology selection matrix | Good foundational overview |
 | &nbsp;&nbsp;&nbsp;&nbsp;A - Ingestion | 8/10 | 3 notes covering batch, incremental, document ingestion | Solid; CDC could be expanded beyond Common Patterns |
 | &nbsp;&nbsp;&nbsp;&nbsp;B - Query & Analysis | 7/10 | RAG patterns, vector embeddings | Niche (Snowflake Cortex-specific) |
 | &nbsp;&nbsp;&nbsp;&nbsp;C - Storage | 9/10 | Distributed systems, Hadoop/MapReduce, multi-tier, open table formats | Iceberg/Hudi coverage is brief |
