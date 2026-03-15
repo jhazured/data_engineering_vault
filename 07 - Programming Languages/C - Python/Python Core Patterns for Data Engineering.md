@@ -563,3 +563,297 @@ def get_bucket(env: Environment) -> str:
     }
     return buckets[env]
 ```
+
+---
+
+## Async Patterns for Data Engineering
+
+### asyncio Fundamentals
+
+Python's `asyncio` module provides cooperative multitasking via an **event loop**. Functions declared with `async def` are coroutines; `await` yields control back to the loop while waiting for I/O.
+
+```python
+import asyncio
+
+async def fetch_data(source: str) -> dict:
+    """Simulate an I/O-bound operation."""
+    await asyncio.sleep(1)  # Non-blocking wait
+    return {"source": source, "rows": 1000}
+
+async def main():
+    result = await fetch_data("api_endpoint")
+    print(result)
+
+asyncio.run(main())  # Entry point — creates and runs the event loop
+```
+
+Key concepts:
+- **Event loop** — the scheduler that runs coroutines, handles I/O callbacks, and manages tasks
+- **Coroutine** — an `async def` function; does nothing until awaited or wrapped in a task
+- **Task** — a coroutine scheduled on the loop via `asyncio.create_task()`; runs concurrently
+
+### Parallel API Calls with aiohttp
+
+[[Python Core Patterns for Data Engineering#6. Error Handling Patterns|Retry patterns]] apply here too. Use `aiohttp` for non-blocking HTTP:
+
+```python
+import aiohttp
+import asyncio
+from typing import List, Dict, Any
+
+async def fetch_page(session: aiohttp.ClientSession, url: str) -> Dict[str, Any]:
+    async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        resp.raise_for_status()
+        return await resp.json()
+
+async def fetch_all_pages(base_url: str, total_pages: int) -> List[Dict]:
+    results = []
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            fetch_page(session, f"{base_url}?page={p}")
+            for p in range(1, total_pages + 1)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [r for r in results if not isinstance(r, Exception)]
+```
+
+### Async Database Queries with asyncpg
+
+`asyncpg` provides a high-performance async driver for PostgreSQL:
+
+```python
+import asyncpg
+
+async def fetch_records(dsn: str, query: str) -> list:
+    conn = await asyncpg.connect(dsn)
+    try:
+        rows = await conn.fetch(query)
+        return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+async def bulk_fetch(dsn: str, queries: List[str]) -> List[list]:
+    pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+    async with pool:
+        tasks = [pool.fetch(q) for q in queries]
+        return await asyncio.gather(*tasks)
+```
+
+### Semaphore for Rate Limiting
+
+Prevent overwhelming upstream APIs or databases with `asyncio.Semaphore`:
+
+```python
+async def rate_limited_fetch(
+    urls: List[str], max_concurrent: int = 10
+) -> List[dict]:
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def _fetch(session: aiohttp.ClientSession, url: str) -> dict:
+        async with semaphore:  # At most max_concurrent coroutines proceed
+            async with session.get(url) as resp:
+                return await resp.json()
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [_fetch(session, url) for url in urls]
+        return await asyncio.gather(*tasks)
+```
+
+### gather for Concurrent Tasks
+
+`asyncio.gather()` runs multiple coroutines concurrently and collects results in order:
+
+```python
+async def ingest_from_multiple_sources():
+    api_data, db_data, file_data = await asyncio.gather(
+        fetch_from_api("https://api.example.com/orders"),
+        fetch_from_database("postgresql://host/db", "SELECT * FROM events"),
+        fetch_from_s3("s3://bucket/data.parquet"),
+    )
+    # All three run concurrently; results are returned in declaration order
+    return merge_datasets(api_data, db_data, file_data)
+```
+
+Use `return_exceptions=True` to prevent one failure from cancelling all tasks — essential for batch ingestion where partial results are acceptable.
+
+### When Async Beats Threading
+
+| Scenario | Async Recommended | Why |
+|----------|-------------------|-----|
+| Parallel API ingestion (100s of endpoints) | Yes | One thread per request wastes memory; async handles thousands of connections on a single thread |
+| Concurrent file downloads (S3, GCS) | Yes | I/O-bound; `aiobotocore` or `gcloud-aio-storage` avoids thread overhead |
+| Paginated API extraction | Yes | Natural fit for semaphore-controlled concurrency |
+| Fan-out webhook delivery | Yes | Fire-and-forget pattern maps cleanly to tasks |
+| Database connection pooling | Yes | `asyncpg` outperforms synchronous drivers for high-concurrency reads |
+
+### When NOT to Use Async
+
+| Scenario | Why Not |
+|----------|---------|
+| CPU-bound transforms (pandas, NumPy) | Async does not bypass the GIL; use `multiprocessing` or [[PySpark Architecture and Core Concepts\|PySpark]] |
+| Spark jobs | Spark has its own parallelism model; wrapping it in async adds complexity for no gain |
+| Simple sequential scripts | Async adds cognitive overhead; a straightforward `for` loop is clearer |
+| Library ecosystem gaps | If your database driver or SDK lacks async support, forced wrapping with `run_in_executor()` negates the benefits |
+
+> [!tip] Rule of thumb: if your pipeline spends most of its time **waiting for network responses**, async will help. If it spends most of its time **computing**, use multiprocessing or a distributed framework.
+
+---
+
+## Packaging and Dependency Management
+
+### pyproject.toml Anatomy
+
+`pyproject.toml` is the standard Python project configuration file ([[Python Core Patterns for Data Engineering#8. Package Structure|see also section 8]]). Key sections:
+
+```toml
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "my-etl-pipeline"
+version = "2.1.0"
+description = "Production data ingestion framework"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Data Team", email = "data@example.com"}]
+dependencies = [
+    "pandas>=2.0,<3.0",
+    "sqlalchemy>=2.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.1", "mypy>=1.0", "pre-commit"]
+aws = ["boto3>=1.28", "aiobotocore>=2.5"]
+gcp = ["google-cloud-bigquery>=3.0", "google-cloud-storage>=2.0"]
+
+[project.scripts]
+etl-run = "my_pipeline.cli:main"
+etl-validate = "my_pipeline.validate:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short --strict-markers"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+```
+
+### Poetry Workflow
+
+Poetry provides dependency resolution, virtual environment management, and publishing in a single tool:
+
+```bash
+# Project lifecycle
+poetry new my-pipeline                        # Scaffold with src layout
+poetry init                                   # Initialise in existing project
+
+# Dependency management
+poetry add pandas sqlalchemy                  # Add production dependencies
+poetry add --group dev pytest ruff mypy       # Dev-only dependencies
+poetry add "boto3>=1.28,<2.0"                 # With version constraints
+poetry remove boto3                           # Remove a dependency
+
+# Lock and install
+poetry lock                                   # Resolve and lock all versions
+poetry lock --no-update                       # Re-lock without upgrading
+poetry install                                # Install everything from lock file
+poetry install --only main                    # Production dependencies only
+
+# Build and publish
+poetry build                                  # Create sdist + wheel in dist/
+poetry publish --repository pypi              # Publish to PyPI
+poetry export -f requirements.txt -o requirements.txt  # Export for pip-based CI
+```
+
+### uv — Fast pip Replacement
+
+`uv` is a Rust-based tool that replaces pip, pip-tools, and virtualenv with dramatically faster performance:
+
+```bash
+# Virtual environment management
+uv venv                                       # Create .venv (auto-detects Python)
+uv venv --python 3.12                         # Specific Python version
+uv python install 3.12                        # Download and install Python
+
+# pip-compatible interface
+uv pip install pandas                         # Install single package
+uv pip install -r requirements.txt            # Install from requirements
+uv pip install -e ".[dev]"                    # Editable install with extras
+
+# Native project management
+uv init my-pipeline                           # Scaffold project
+uv add pandas sqlalchemy                      # Add to pyproject.toml + lock
+uv add --dev pytest ruff                      # Dev dependencies
+uv lock                                       # Generate uv.lock
+uv sync                                       # Install exactly what lock specifies
+uv run pytest                                 # Run within managed environment
+```
+
+### pip-tools (pip-compile)
+
+`pip-tools` bridges the gap between raw `requirements.txt` and full dependency managers:
+
+```bash
+# Install pip-tools
+pip install pip-tools
+
+# Create requirements.in with top-level dependencies
+# requirements.in:
+#   pandas>=2.0
+#   sqlalchemy>=2.0
+
+pip-compile requirements.in                   # Resolve → requirements.txt (pinned)
+pip-compile --upgrade                         # Upgrade all to latest compatible
+pip-compile --generate-hashes                 # Add hashes for supply-chain security
+pip-sync requirements.txt                     # Make environment match exactly
+```
+
+### requirements.txt vs Lock Files
+
+| Approach | Reproducible | Flexible | Best For |
+|----------|-------------|----------|----------|
+| `requirements.txt` (unpinned) | No | Yes | Quick experiments, tutorials |
+| `pip freeze > requirements.txt` | Snapshot only | No | Simple CI, Docker builds |
+| `pip-compile` (pip-tools) | Yes | Moderate | Teams using pip without Poetry |
+| `poetry.lock` | Yes | Yes | Libraries, published packages |
+| `uv.lock` | Yes | Yes | All use cases (fastest resolver) |
+
+### When to Use Each Tool
+
+| Tool | Best For | Avoid When |
+|------|----------|------------|
+| **pip + venv** | Simple scripts, Docker layers, CI without extras | Large dependency trees with conflicts |
+| **pip-tools** | Teams already on pip wanting reproducibility | Publishing libraries to PyPI |
+| **Poetry** | Library development, publishing, monorepos with extras | Extremely large projects (slower resolver) |
+| **uv** | Everything — fastest resolver, drop-in replacement | Ecosystem is very new; some edge cases remain |
+
+### Editable Installs for Development
+
+Editable installs let you modify source code without reinstalling:
+
+```bash
+# With pip
+pip install -e .                              # Install current project in dev mode
+pip install -e ".[dev]"                       # With optional dev dependencies
+
+# With uv
+uv pip install -e ".[dev]"                    # Same semantics, faster
+
+# With Poetry
+poetry install                                # Always editable by default
+```
+
+Editable installs are essential when:
+- Developing a shared library used by multiple pipelines
+- Running [[Python Testing with pytest|tests]] against the installed package
+- Using `entry_points` / `[project.scripts]` during local development
+
+> [!tip] Prefer `uv` for new projects — it handles virtual environments, dependency resolution, and locking in a single tool with speed comparable to Cargo or npm.

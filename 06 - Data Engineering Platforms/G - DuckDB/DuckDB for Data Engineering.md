@@ -342,3 +342,221 @@ DuckDB is not a general-purpose replacement for all database workloads. Key cons
 - [[Core dbt Fundamentals]] — dbt transformation orchestration, pairs well with dbt-duckdb for local dev.
 - [[pandas & Polars for Data Engineering]] — programmatic data manipulation alongside DuckDB SQL.
 - [[SQL Query Optimization]] — query tuning principles applicable to DuckDB's SQL dialect.
+
+---
+
+## Recipe Cookbook
+
+Practical query recipes for common data engineering tasks. Each recipe is self-contained and can be run in the DuckDB CLI or via Python.
+
+### Read Remote Parquet and Join with Local CSV
+
+```sql
+INSTALL httpfs;
+LOAD httpfs;
+
+-- Join a remote Parquet fact table with a local CSV dimension
+SELECT
+    d.region_name,
+    d.country,
+    COUNT(*) AS order_count,
+    SUM(f.amount) AS total_amount,
+    AVG(f.amount) AS avg_amount
+FROM read_parquet('s3://data-lake/orders/year=2025/**/*.parquet',
+                  hive_partitioning = true) AS f
+JOIN read_csv('reference_data/regions.csv',
+              header = true,
+              auto_detect = true) AS d
+    ON f.region_id = d.region_id
+GROUP BY d.region_name, d.country
+ORDER BY total_amount DESC;
+```
+
+### Pivot Table from Long to Wide
+
+```sql
+-- Source: long-format table with (product, month, revenue)
+-- Target: one row per product, one column per month
+PIVOT (
+    SELECT product, month_name, revenue
+    FROM monthly_sales
+)
+ON month_name
+USING SUM(revenue)
+GROUP BY product
+ORDER BY product;
+
+-- Manual pivot with conditional aggregation (more control)
+SELECT
+    product,
+    SUM(CASE WHEN month_name = 'January' THEN revenue END) AS january,
+    SUM(CASE WHEN month_name = 'February' THEN revenue END) AS february,
+    SUM(CASE WHEN month_name = 'March' THEN revenue END) AS march
+FROM monthly_sales
+GROUP BY product;
+```
+
+### Data Quality Checks
+
+```sql
+-- Comprehensive quality profile for a Parquet dataset
+WITH source AS (
+    SELECT * FROM read_parquet('output/customers.parquet')
+)
+SELECT
+    COUNT(*) AS total_rows,
+
+    -- Null counts per column
+    COUNT(*) FILTER (WHERE customer_id IS NULL) AS null_customer_id,
+    COUNT(*) FILTER (WHERE email IS NULL) AS null_email,
+    COUNT(*) FILTER (WHERE created_at IS NULL) AS null_created_at,
+
+    -- Duplicate detection
+    COUNT(*) - COUNT(DISTINCT customer_id) AS duplicate_customer_ids,
+
+    -- Distribution checks
+    MIN(created_at) AS earliest_record,
+    MAX(created_at) AS latest_record,
+    APPROX_COUNT_DISTINCT(email) AS approx_unique_emails,
+
+    -- Numeric distribution
+    AVG(lifetime_value) AS avg_lifetime_value,
+    MEDIAN(lifetime_value) AS median_lifetime_value,
+    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY lifetime_value)
+        AS p95_lifetime_value,
+    STDDEV(lifetime_value) AS stddev_lifetime_value
+FROM source;
+
+-- Row-level duplicate check with detail
+SELECT customer_id, COUNT(*) AS occurrences
+FROM read_parquet('output/customers.parquet')
+GROUP BY customer_id
+HAVING COUNT(*) > 1
+ORDER BY occurrences DESC
+LIMIT 20;
+```
+
+### Export to Parquet with Partitioning
+
+```sql
+-- Write partitioned Parquet output (Hive-style directory structure)
+COPY (
+    SELECT
+        *,
+        YEAR(event_date) AS year,
+        MONTH(event_date) AS month
+    FROM read_csv('raw_events.csv', header = true, auto_detect = true)
+)
+TO 'output/events'
+(FORMAT PARQUET,
+ PARTITION_BY (year, month),
+ OVERWRITE_OR_IGNORE true,
+ COMPRESSION 'zstd',
+ ROW_GROUP_SIZE 100000);
+```
+
+The resulting directory structure is:
+
+```
+output/events/year=2025/month=1/data_0.parquet
+output/events/year=2025/month=2/data_0.parquet
+...
+```
+
+### Compare Two Datasets (EXCEPT)
+
+```sql
+-- Find rows in the new dataset that are not in the baseline
+-- Useful for regression testing after refactoring a transformation
+SELECT 'in_new_only' AS diff_type, *
+FROM read_parquet('output/v2/customers.parquet')
+EXCEPT
+SELECT 'in_new_only', *
+FROM read_parquet('output/v1/customers.parquet')
+
+UNION ALL
+
+SELECT 'in_baseline_only' AS diff_type, *
+FROM read_parquet('output/v1/customers.parquet')
+EXCEPT
+SELECT 'in_baseline_only', *
+FROM read_parquet('output/v2/customers.parquet');
+
+-- Summary count of differences
+SELECT
+    (SELECT COUNT(*) FROM (
+        SELECT * FROM read_parquet('output/v2/customers.parquet')
+        EXCEPT
+        SELECT * FROM read_parquet('output/v1/customers.parquet')
+    )) AS rows_added_or_changed,
+    (SELECT COUNT(*) FROM (
+        SELECT * FROM read_parquet('output/v1/customers.parquet')
+        EXCEPT
+        SELECT * FROM read_parquet('output/v2/customers.parquet')
+    )) AS rows_removed_or_changed;
+```
+
+### JSON Unnesting
+
+```sql
+-- Unnest nested JSON arrays into relational rows
+SELECT
+    j.order_id,
+    j.customer_name,
+    unnested.item_name,
+    unnested.quantity,
+    unnested.unit_price,
+    unnested.quantity * unnested.unit_price AS line_total
+FROM read_json_auto('orders.json') AS j,
+     LATERAL UNNEST(j.line_items) AS unnested(item_name, quantity, unit_price);
+
+-- Deeply nested JSON with struct access
+SELECT
+    j->>'event_id' AS event_id,
+    j->'metadata'->>'source' AS source,
+    j->'metadata'->'tags' AS tags,
+    json_array_length(j->'metadata'->'tags') AS tag_count
+FROM read_json('events.ndjson', format = 'newline_delimited') AS t(j);
+```
+
+### Time-Series Gap Detection
+
+```sql
+-- Detect missing dates in a daily time series
+WITH date_spine AS (
+    SELECT UNNEST(generate_series(
+        DATE '2025-01-01',
+        DATE '2025-12-31',
+        INTERVAL '1 day'
+    )) AS expected_date
+),
+actual_dates AS (
+    SELECT DISTINCT event_date
+    FROM read_parquet('metrics/daily_metrics.parquet')
+)
+SELECT
+    ds.expected_date AS missing_date,
+    ds.expected_date::VARCHAR AS day_of_week
+FROM date_spine ds
+LEFT JOIN actual_dates ad
+    ON ds.expected_date = ad.event_date
+WHERE ad.event_date IS NULL
+ORDER BY ds.expected_date;
+
+-- Detect gaps larger than a threshold in irregular time series
+WITH ordered AS (
+    SELECT
+        sensor_id,
+        reading_time,
+        LAG(reading_time) OVER (PARTITION BY sensor_id ORDER BY reading_time)
+            AS prev_reading_time
+    FROM read_parquet('iot/sensor_readings.parquet')
+)
+SELECT
+    sensor_id,
+    prev_reading_time AS gap_start,
+    reading_time AS gap_end,
+    AGE(reading_time, prev_reading_time) AS gap_duration
+FROM ordered
+WHERE AGE(reading_time, prev_reading_time) > INTERVAL '1 hour'
+ORDER BY gap_duration DESC;

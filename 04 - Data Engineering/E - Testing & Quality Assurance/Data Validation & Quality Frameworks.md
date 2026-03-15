@@ -469,6 +469,123 @@ def evaluate_quality_alert(score, job_name):
 
 ---
 
+## Data Profiling
+
+Data profiling is the systematic analysis of a dataset's structure, content, and quality before and during pipeline execution. It answers the question: "What does the data actually look like?" rather than "Does it pass predefined rules?"
+
+### What to Profile
+
+| Dimension | What It Measures | Example Metrics |
+|-----------|-----------------|-----------------|
+| **Completeness** | Presence of values | Null rate per column, row fill rate |
+| **Uniqueness** | Distinct value density | Cardinality, duplicate rate, unique percentage |
+| **Distribution** | Shape of values | Mean, median, standard deviation, histogram, skewness |
+| **Outliers** | Extreme or anomalous values | Values beyond 3 standard deviations, IQR fence violations |
+| **Type consistency** | Data type adherence | Mixed types in string columns, date format variations |
+| **Pattern conformity** | Format adherence | Email regex match rate, phone number format compliance |
+| **Referential integrity** | Cross-table consistency | Orphan foreign keys, missing parent records |
+
+### Profiling Tools
+
+| Tool | Approach | Output | Best For |
+|------|----------|--------|----------|
+| **ydata-profiling** (formerly pandas-profiling) | DataFrame analysis, HTML report | Interactive HTML with correlations, histograms | Exploratory profiling, ad-hoc analysis |
+| **whylogs** | Lightweight statistical logging | Mergeable profile objects (`.bin` files) | Production pipelines, drift detection |
+| **Great Expectations Profiler** | Auto-generates expectation suites from data | Expectation suite JSON | Bootstrap validation rules from data |
+| **dbt profiling packages** (e.g., `dbt_profiler`) | SQL-based column stats | dbt models with profiling metrics | Warehouse-native profiling |
+
+### Automated Profiling in CI
+
+Integrate profiling into CI pipelines to catch schema drift, distribution shifts, and quality regressions before data reaches production.
+
+**Pattern: whylogs profile comparison in CI**
+
+```python
+import whylogs as why
+from whylogs.core.constraints.factories import (
+    null_percentage_below,
+    greater_than_number,
+    column_is_probably_unique,
+)
+from whylogs.core.constraints import ConstraintsBuilder
+
+def profile_and_validate(df, dataset_name: str):
+    """Profile a DataFrame and validate against constraints."""
+    # Generate a statistical profile
+    profile = why.log(df).profile()
+    profile_view = profile.view()
+
+    # Define constraints (equivalent to expectations)
+    builder = ConstraintsBuilder(dataset_profile_view=profile_view)
+    builder.add_constraint(null_percentage_below(column_name="customer_id", number=0.01))
+    builder.add_constraint(greater_than_number(column_name="order_amount", number=0.0))
+    builder.add_constraint(column_is_probably_unique(column_name="transaction_id"))
+    constraints = builder.build()
+
+    report = constraints.generate_constraints_report()
+    if report.failures:
+        raise ValueError(
+            f"Profiling constraints failed for {dataset_name}: "
+            f"{[f.name for f in report.failures]}"
+        )
+    return profile_view
+```
+
+**Pattern: ydata-profiling HTML report generation**
+
+```python
+from ydata_profiling import ProfileReport
+
+def generate_profile_report(df, title: str, output_path: str):
+    """Generate an HTML profiling report for review."""
+    profile = ProfileReport(
+        df,
+        title=title,
+        explorative=True,
+        correlations={"cramers": {"calculate": True}},
+        missing_diagrams={"bar": True, "matrix": True},
+    )
+    profile.to_file(output_path)
+    return output_path
+```
+
+**Pattern: drift detection between profiling runs**
+
+```python
+import whylogs as why
+
+def detect_drift(reference_profile_path: str, current_df):
+    """Compare current data against a reference profile for drift."""
+    ref_profile = why.read(reference_profile_path).view()
+    current_profile = why.log(current_df).profile().view()
+
+    # Compare column-level statistics
+    ref_summary = ref_profile.to_pandas()
+    curr_summary = current_profile.to_pandas()
+
+    drift_columns = []
+    for col in ref_summary.index:
+        if col in curr_summary.index:
+            ref_mean = ref_summary.loc[col].get("distribution/mean", 0)
+            curr_mean = curr_summary.loc[col].get("distribution/mean", 0)
+            if ref_mean and abs(curr_mean - ref_mean) / abs(ref_mean) > 0.25:
+                drift_columns.append(col)
+
+    if drift_columns:
+        raise ValueError(f"Distribution drift detected in columns: {drift_columns}")
+```
+
+### CI Integration Checklist
+
+- [ ] Generate profiles on every staging load (before promotion to production)
+- [ ] Store reference profiles as versioned artefacts (e.g., in GCS or S3)
+- [ ] Compare current run profiles against reference to detect drift
+- [ ] Fail the pipeline if null rates, cardinality, or distributions exceed thresholds
+- [ ] Publish HTML profiling reports to a shared location for analyst review
+- [ ] Use whylogs for lightweight production profiling; ydata-profiling for deep exploratory analysis
+
+---
+
 ## See Also
 
 - [[dbt Testing & Data Quality]] — warehouse-layer testing with dbt generic/singular tests

@@ -457,3 +457,156 @@ Sequence diagrams excel in specific documentation scenarios. Choosing the right 
 3. **Label messages precisely** — "send data" is useless; "POST /api/v2/shipments {manifest_id, items[]}" is useful
 4. **Use activation bars consistently** — they show processing duration and help identify bottlenecks
 5. **Add notes for context** — `Note over` blocks explain *why* something happens without cluttering the message flow
+
+---
+
+## Error Handling and Retry Flows
+
+### Pipeline Retry with Exponential Backoff
+
+```mermaid
+sequenceDiagram
+    participant Orch as Orchestrator
+    participant Job as Pipeline Job
+    participant API as External API
+    participant Log as Audit Log
+
+    Orch->>Job: Execute ingestion
+    activate Job
+
+    Job->>API: GET /data?page=1
+    API-->>Job: 503 Service Unavailable
+
+    loop Retry with exponential backoff (attempt 1..N)
+        Note over Job: Wait 2^attempt seconds (2s, 4s, 8s...)
+        Job->>API: GET /data?page=1 (retry)
+        alt Success
+            API-->>Job: 200 OK {data}
+            Job->>Log: INSERT retry_success (attempts, total_delay)
+        else Max retries exceeded
+            API-->>Job: 503 Service Unavailable
+            Job->>Log: INSERT retry_exhausted (last_error, attempts)
+            Job->>Orch: Raise ExtractionError
+        end
+    end
+
+    deactivate Job
+```
+
+### Dead-Letter Queue Flow
+
+```mermaid
+sequenceDiagram
+    participant Prod as Producer
+    participant Broker as Kafka Broker
+    participant Consumer as Consumer
+    participant DLQ as Dead-Letter Topic
+    participant Alert as Alerting Service
+    participant Ops as Ops Dashboard
+
+    Prod->>Broker: Produce message (main topic)
+    Broker-)Consumer: Poll batch
+    activate Consumer
+
+    alt Valid message
+        Consumer->>Consumer: Deserialise and validate
+        Consumer->>Consumer: Process and transform
+        Consumer->>Broker: Commit offset
+    else Deserialisation failure
+        Consumer->>DLQ: Produce to dead-letter topic (original payload + error metadata)
+        Consumer->>Broker: Commit offset (skip poison pill)
+    else Processing failure (after retries)
+        Consumer->>DLQ: Produce to dead-letter topic (payload + stack trace)
+        Consumer->>Broker: Commit offset
+    end
+
+    deactivate Consumer
+
+    Note over DLQ: Dead-letter messages accumulate
+
+    DLQ-)Alert: Threshold breach (> N messages in window)
+    Alert->>Ops: Page on-call engineer
+    Ops->>DLQ: Inspect failed messages
+    Ops->>Broker: Replay corrected messages to main topic
+```
+
+### Circuit Breaker State Transitions
+
+```mermaid
+sequenceDiagram
+    participant Client as Pipeline Client
+    participant CB as Circuit Breaker
+    participant Svc as Downstream Service
+    participant Mon as Monitoring
+
+    Note over CB: State: CLOSED (normal operation)
+
+    Client->>CB: Request
+    CB->>Svc: Forward request
+    Svc-->>CB: 500 Internal Server Error
+    CB->>CB: Increment failure counter
+
+    Client->>CB: Request
+    CB->>Svc: Forward request
+    Svc-->>CB: 500 Internal Server Error
+    CB->>CB: Failure threshold reached
+
+    Note over CB: State: OPEN (fail fast)
+    CB->>Mon: Circuit opened (service: downstream, failures: 5)
+
+    Client->>CB: Request
+    CB-->>Client: CircuitOpenError (no call to service)
+
+    Note over CB: After cooldown period (e.g. 30s)
+    Note over CB: State: HALF-OPEN (probe)
+
+    Client->>CB: Request
+    CB->>Svc: Forward probe request
+    alt Probe succeeds
+        Svc-->>CB: 200 OK
+        Note over CB: State: CLOSED (reset counters)
+        CB->>Mon: Circuit closed (service recovered)
+        CB-->>Client: Success
+    else Probe fails
+        Svc-->>CB: 500 Error
+        Note over CB: State: OPEN (restart cooldown)
+        CB->>Mon: Circuit remains open
+        CB-->>Client: CircuitOpenError
+    end
+```
+
+### Webhook Delivery with Signature Verification
+
+```mermaid
+sequenceDiagram
+    participant Src as Source System
+    participant Wh as Webhook Endpoint
+    participant Auth as Signature Validator
+    participant Queue as Processing Queue
+    participant DLQ as Dead-Letter Queue
+
+    Src->>Src: Generate HMAC-SHA256(payload, shared_secret)
+    Src->>Wh: POST /webhooks/events (payload + X-Signature header)
+    activate Wh
+
+    Wh->>Auth: Validate signature
+    activate Auth
+    Auth->>Auth: Recompute HMAC-SHA256(request_body, stored_secret)
+    Auth->>Auth: Compare with X-Signature (constant-time)
+
+    alt Signature valid
+        Auth-->>Wh: Verified
+        Wh->>Queue: Enqueue event for processing
+        Wh-->>Src: 202 Accepted
+    else Signature invalid
+        Auth-->>Wh: Rejected
+        Wh->>DLQ: Log rejected payload (source IP, timestamp)
+        Wh-->>Src: 401 Unauthorised
+    else Signature missing
+        Auth-->>Wh: Missing header
+        Wh-->>Src: 400 Bad Request
+    end
+
+    deactivate Auth
+    deactivate Wh
+```

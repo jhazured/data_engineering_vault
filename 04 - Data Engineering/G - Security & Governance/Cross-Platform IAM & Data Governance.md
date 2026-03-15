@@ -439,6 +439,146 @@ General best practices for data retention across platforms.
 
 ---
 
+## Data Masking Patterns
+
+Data masking replaces sensitive values with realistic but non-identifiable substitutes. It is a key control for protecting PII, PHI, and other regulated data both in production queries and in non-production environments.
+
+### Static vs Dynamic Masking
+
+| Aspect | Static Masking | Dynamic Masking |
+|--------|---------------|-----------------|
+| **When applied** | At data copy/export time | At query time |
+| **Original data** | Permanently altered in the copy | Unchanged in storage |
+| **Use case** | Non-prod environments, test data, analytics sandboxes | Production queries where different roles see different views |
+| **Performance** | No query-time overhead | Slight overhead per query (policy evaluation) |
+| **Reversibility** | Irreversible (one-way) | Role-dependent — privileged roles see original values |
+
+### Masking Techniques
+
+| Technique | Description | Example | When to Use |
+|-----------|-------------|---------|-------------|
+| **Hash** | Deterministic one-way hash (SHA-256) | `john@acme.com` → `a3f2b8c...` | Pseudonymisation; preserves join capability |
+| **Redact** | Replace with fixed string or partial mask | `john@acme.com` → `****@****.com` | Display-level masking for dashboards |
+| **Tokenise** | Replace with random token; store mapping in vault | `john@acme.com` → `tok_9x2k4` | Reversible masking; supports re-identification by authorised parties |
+| **Generalise** | Reduce precision | `1987-03-15` → `1987-01-01` (year only) | k-anonymity; statistical analysis |
+| **Noise injection** | Add random offset to numeric values | `salary: 85000` → `salary: 83412` | Differential privacy; aggregate accuracy preserved |
+| **Shuffle** | Randomly reassign values within a column | Salaries redistributed across rows | Preserves distribution; breaks individual linkage |
+| **Nullify** | Replace with NULL | `SSN: 123-45-6789` → `NULL` | Simplest approach; column becomes unusable |
+
+### Platform Implementations
+
+#### Snowflake Masking Policies
+
+Snowflake applies dynamic masking at query time via `CREATE MASKING POLICY`:
+
+```sql
+-- Create a masking policy for email addresses
+CREATE OR REPLACE MASKING POLICY mask_email AS (val STRING)
+RETURNS STRING ->
+    CASE
+        WHEN CURRENT_ROLE() IN ('DATA_ENGINEER', 'ANALYST_FULL')
+            THEN val
+        WHEN CURRENT_ROLE() = 'ANALYST_RESTRICTED'
+            THEN REGEXP_REPLACE(val, '.+@', '****@')
+        ELSE '****'
+    END;
+
+-- Apply to a column
+ALTER TABLE customers MODIFY COLUMN email
+    SET MASKING POLICY mask_email;
+
+-- Conditional masking based on data classification tag
+CREATE OR REPLACE MASKING POLICY mask_by_tag AS (val STRING)
+RETURNS STRING ->
+    CASE
+        WHEN SYSTEM$GET_TAG_ON_CURRENT_COLUMN('pii_classification') = 'PUBLIC'
+            THEN val
+        ELSE SHA2(val)
+    END;
+```
+
+#### Databricks Column Masks
+
+Databricks Unity Catalog supports column masks on Delta tables:
+
+```sql
+-- Create a masking function
+CREATE FUNCTION mask_ssn(ssn STRING)
+RETURNS STRING
+RETURN
+    CASE
+        WHEN IS_MEMBER('pii_viewers') THEN ssn
+        ELSE CONCAT('***-**-', RIGHT(ssn, 4))
+    END;
+
+-- Apply mask to a column
+ALTER TABLE customers
+    ALTER COLUMN ssn SET MASK mask_ssn;
+```
+
+#### BigQuery Column-Level Security
+
+BigQuery uses policy tags from Data Catalog for column-level access control:
+
+```sql
+-- Policy tags are applied via Data Catalog taxonomy (Terraform or Console)
+-- Column-level access is enforced by IAM binding on the policy tag
+
+-- Terraform example
+resource "google_bigquery_table" "customers" {
+  schema = jsonencode([
+    {
+      name = "email"
+      type = "STRING"
+      policyTags = {
+        names = ["projects/my-project/locations/eu/taxonomies/123/policyTags/456"]
+      }
+    }
+  ])
+}
+
+-- Only users with Fine-Grained Reader role on the policy tag can see the column
+-- Others receive an access denied error (not masked — fully blocked)
+```
+
+### Masking in Non-Production Environments
+
+Non-prod environments require static masking to prevent PII leakage into development, testing, and staging systems.
+
+**Pattern: ETL-based static masking pipeline**
+
+```python
+import hashlib
+
+MASKING_RULES = {
+    "email":       lambda v: hashlib.sha256(v.encode()).hexdigest()[:16] + "@masked.local",
+    "phone":       lambda v: "+00-000-" + v[-4:] if v else None,
+    "first_name":  lambda v: "User_" + hashlib.md5(v.encode()).hexdigest()[:6],
+    "last_name":   lambda v: "Surname_" + hashlib.md5(v.encode()).hexdigest()[:6],
+    "date_of_birth": lambda v: v[:4] + "-01-01" if v else None,  # Generalise to year
+    "salary":      lambda v: round(v * (0.9 + (hash(str(v)) % 20) / 100), 2),  # Noise
+}
+
+def mask_dataframe(df, rules=MASKING_RULES):
+    """Apply static masking rules to a pandas DataFrame."""
+    masked = df.copy()
+    for col, mask_fn in rules.items():
+        if col in masked.columns:
+            masked[col] = masked[col].apply(lambda v: mask_fn(v) if v else v)
+    return masked
+```
+
+**Non-prod masking checklist:**
+
+- [ ] Mask all PII columns before copying to lower environments
+- [ ] Maintain referential integrity (use deterministic hashing for join keys)
+- [ ] Validate masked data still passes schema and type checks
+- [ ] Automate masking as part of the environment refresh pipeline
+- [ ] Never store masking reversal keys in the same environment as masked data
+- [ ] Audit and log all masking operations for compliance evidence
+
+---
+
 ## Related Notes
 
 - [[Snowflake RBAC & Data Security]] -- detailed Snowflake role hierarchy, data classification, and access auditing

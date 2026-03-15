@@ -284,3 +284,154 @@ Each diagram type serves a different purpose. Choosing the wrong one leads to co
 - **"What infrastructure do we need?"** — use an architecture diagram
 - **"What transforms the data at each step?"** — use a DFD (Level 2)
 - **"What happens when the API call fails?"** — use a [[Sequence Diagrams|sequence diagram]] with alt fragments
+
+---
+
+## Domain-Specific DFD Examples
+
+### Healthcare: HL7/FHIR Ingestion to Analytics
+
+Patient data flows from clinical systems through de-identification before reaching analytics — regulatory compliance (HIPAA, UK Data Protection Act) demands explicit separation of identifiable and anonymised data.
+
+```mermaid
+flowchart LR
+    subgraph Sources [Clinical Sources]
+        EMR[EMR System]
+        HL7[HL7 v2 Feed]
+        FHIR[FHIR API]
+    end
+
+    subgraph Ingestion [Ingestion Layer]
+        Parse[Parse & Validate]
+        Conform[Conform to FHIR R4]
+    end
+
+    subgraph DeID [De-Identification]
+        PII[(PII Vault)]
+        Tokenise[Tokenise & Hash]
+        Redact[Redact Free Text]
+    end
+
+    subgraph Analytics [Analytics Layer]
+        DW[(Clinical Data Warehouse)]
+        Dash[Clinical Dashboards]
+        Research[Research Datasets]
+    end
+
+    EMR -->|ADT messages| Parse
+    HL7 -->|HL7 v2 segments| Parse
+    FHIR -->|FHIR bundles| Parse
+    Parse -->|validated resources| Conform
+    Conform -->|standardised records| Tokenise
+    Tokenise -->|patient identifiers| PII
+    Tokenise -->|tokenised records| Redact
+    Redact -->|de-identified records| DW
+    DW -->|aggregated metrics| Dash
+    DW -->|cohort extracts| Research
+```
+
+Key design decisions:
+- **PII Vault** is a separate data store with restricted access — only the tokenisation process writes to it
+- **De-identification is a process, not a flag** — the DFD makes the transformation boundary explicit for auditors
+- **Research datasets** branch from the warehouse, never from raw sources — ensures de-identification is always applied
+
+### Finance: Transaction Ingestion to Fraud Detection
+
+Financial pipelines require real-time scoring alongside batch reporting, with clear separation between the hot path (fraud detection) and cold path (regulatory reporting).
+
+```mermaid
+flowchart LR
+    subgraph Sources [Transaction Sources]
+        POS[Point-of-Sale]
+        Online[Online Payments]
+        ATM[ATM Network]
+    end
+
+    subgraph Streaming [Real-Time Path]
+        Ingest[Stream Ingest]
+        Enrich[Enrich with Customer Profile]
+        Score[Fraud Scoring Model]
+        Queue[(Alert Queue)]
+    end
+
+    subgraph Batch [Batch Path]
+        Stage[(Transaction Staging)]
+        Agg[Aggregate & Reconcile]
+        DW[(Regulatory Data Warehouse)]
+    end
+
+    subgraph Outputs [Consumers]
+        Fraud[Fraud Analysts]
+        Reg[Regulatory Reports]
+        BI[Finance Dashboards]
+    end
+
+    POS -->|card transactions| Ingest
+    Online -->|payment events| Ingest
+    ATM -->|withdrawal events| Ingest
+    Ingest -->|raw events| Enrich
+    Enrich -->|enriched events| Score
+    Score -->|flagged transactions| Queue
+    Queue -->|alerts| Fraud
+    Ingest -->|raw events| Stage
+    Stage -->|staged transactions| Agg
+    Agg -->|reconciled records| DW
+    DW -->|regulatory extracts| Reg
+    DW -->|aggregated metrics| BI
+```
+
+Key design decisions:
+- **Dual-path architecture** — streaming for latency-sensitive fraud detection, batch for accurate reconciliation
+- **Enrichment before scoring** — customer profile data enhances model accuracy
+- **Staging as a buffer** — the batch path reads from the same ingest but writes to a separate store, decoupling real-time and batch concerns
+
+### E-Commerce: Clickstream to Recommendations
+
+Clickstream data requires sessionisation (grouping raw events into user sessions) before it becomes useful for analytics or recommendation engines.
+
+```mermaid
+flowchart LR
+    subgraph Collection [Event Collection]
+        Web[Web Tracker]
+        App[Mobile SDK]
+        CDN[CDN Edge Logs]
+    end
+
+    subgraph Processing [Processing Layer]
+        Collect[Event Collector]
+        Dedup[Deduplicate & Validate]
+        Session[Sessionise]
+        Events[(Event Store)]
+    end
+
+    subgraph Analytics [Analytics & ML]
+        Funnel[Funnel Analysis]
+        Rec[Recommendation Engine]
+        Seg[Customer Segmentation]
+        Features[(Feature Store)]
+    end
+
+    subgraph Serving [Serving Layer]
+        API[Recommendation API]
+        Dash[Product Dashboards]
+    end
+
+    Web -->|page views, clicks| Collect
+    App -->|screen events, taps| Collect
+    CDN -->|access logs| Collect
+    Collect -->|raw events| Dedup
+    Dedup -->|validated events| Session
+    Session -->|sessionised events| Events
+    Events -->|session data| Funnel
+    Events -->|user-item interactions| Rec
+    Events -->|behavioural features| Seg
+    Rec -->|model scores| Features
+    Seg -->|segment labels| Features
+    Features -->|real-time features| API
+    Funnel -->|conversion metrics| Dash
+```
+
+Key design decisions:
+- **Sessionisation is a distinct process** — grouping events by user session (typically 30-minute inactivity timeout) is a transformation that must happen before downstream consumers
+- **Feature Store** bridges ML and serving — recommendations and segmentation write computed features to a shared store, which the API reads at serving time
+- **Deduplication before sessionisation** — duplicate events (common with client-side tracking) would inflate session metrics and distort recommendations

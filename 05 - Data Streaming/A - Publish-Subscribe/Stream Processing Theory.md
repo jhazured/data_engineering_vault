@@ -168,3 +168,166 @@ From the Beam model (Akidau):
 4. **How** do refinements relate? → Accumulation (discarding, accumulating, retracting)
 
 Every streaming pipeline answers these four questions, explicitly or implicitly.
+
+## Practical Examples
+
+Hands-on [[Apache Kafka]] code using the `confluent-kafka` Python client. These patterns apply to most publish-subscribe systems with minor adaptation.
+
+### Kafka Producer
+
+```python
+from confluent_kafka import Producer
+import json
+import socket
+
+conf = {
+    "bootstrap.servers": "localhost:9092",
+    "client.id": socket.gethostname(),
+    "acks": "all",                # Wait for all replicas
+    "retries": 5,
+    "retry.backoff.ms": 300,
+    "enable.idempotence": True,   # Exactly-once producer semantics
+}
+
+producer = Producer(conf)
+
+def delivery_callback(err, msg):
+    """Called once per message to indicate delivery result."""
+    if err is not None:
+        print(f"Delivery failed for {msg.key()}: {err}")
+    else:
+        print(f"Delivered to {msg.topic()} [{msg.partition()}] @ offset {msg.offset()}")
+
+def publish_event(topic: str, key: str, payload: dict) -> None:
+    producer.produce(
+        topic=topic,
+        key=key.encode("utf-8"),
+        value=json.dumps(payload).encode("utf-8"),
+        callback=delivery_callback,
+    )
+    producer.poll(0)  # Trigger delivery callbacks
+
+# Flush remaining messages on shutdown
+producer.flush(timeout=10)
+```
+
+### Kafka Consumer with Offset Management
+
+```python
+from confluent_kafka import Consumer, KafkaException
+import json
+
+conf = {
+    "bootstrap.servers": "localhost:9092",
+    "group.id": "order-processing-group",
+    "auto.offset.reset": "earliest",
+    "enable.auto.commit": False,  # Manual offset management
+}
+
+consumer = Consumer(conf)
+consumer.subscribe(["orders"])
+
+try:
+    while True:
+        msg = consumer.poll(timeout=1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            raise KafkaException(msg.error())
+
+        payload = json.loads(msg.value().decode("utf-8"))
+        process_order(payload)  # Your business logic
+
+        # Commit only after successful processing (at-least-once)
+        consumer.commit(message=msg, asynchronous=False)
+except KeyboardInterrupt:
+    pass
+finally:
+    consumer.close()
+```
+
+### Simple Stream Processor
+
+A lightweight pattern that reads from one topic, transforms, and writes to another — the core of [[Lambda vs Kappa Architecture|Kappa architecture]].
+
+```python
+from confluent_kafka import Consumer, Producer
+import json
+
+consumer = Consumer({
+    "bootstrap.servers": "localhost:9092",
+    "group.id": "enrichment-processor",
+    "auto.offset.reset": "earliest",
+    "enable.auto.commit": False,
+})
+producer = Producer({"bootstrap.servers": "localhost:9092", "acks": "all"})
+
+consumer.subscribe(["raw-events"])
+
+while True:
+    msg = consumer.poll(timeout=1.0)
+    if msg is None or msg.error():
+        continue
+
+    event = json.loads(msg.value().decode("utf-8"))
+
+    # --- Transform / enrich ---
+    enriched = {
+        **event,
+        "processed_at": datetime.utcnow().isoformat(),
+        "region": lookup_region(event.get("ip")),
+    }
+
+    producer.produce(
+        topic="enriched-events",
+        key=msg.key(),
+        value=json.dumps(enriched).encode("utf-8"),
+    )
+    producer.poll(0)
+    consumer.commit(message=msg, asynchronous=False)
+```
+
+### Error Handling Patterns
+
+Robust consumers need strategies for poison pills (unparsable messages) and transient failures.
+
+```python
+from confluent_kafka import Consumer, Producer
+import json, logging
+
+dead_letter_producer = Producer({"bootstrap.servers": "localhost:9092"})
+
+def handle_message(msg) -> None:
+    """Process a single message with dead-letter queue fallback."""
+    try:
+        payload = json.loads(msg.value().decode("utf-8"))
+        process(payload)
+    except json.JSONDecodeError:
+        # Poison pill — send to dead-letter topic, do not retry
+        logging.error(f"Unparsable message at offset {msg.offset()}")
+        dead_letter_producer.produce(
+            topic="orders.dead-letter",
+            key=msg.key(),
+            value=msg.value(),
+            headers={"error": "json_decode_error"},
+        )
+    except TransientError:
+        # Retriable — raise so the consumer can retry
+        raise
+    except Exception as exc:
+        # Unexpected — log and dead-letter to avoid blocking the consumer
+        logging.exception(f"Unexpected error: {exc}")
+        dead_letter_producer.produce(
+            topic="orders.dead-letter",
+            key=msg.key(),
+            value=msg.value(),
+            headers={"error": str(exc)},
+        )
+```
+
+| Pattern | When to Use | Mechanism |
+|---------|-------------|-----------|
+| **Dead-letter queue** | Unparsable or permanently failed messages | Route to a separate topic for investigation |
+| **Exponential back-off** | Transient downstream failures (DB timeout) | Retry with increasing delays |
+| **Circuit breaker** | Downstream service outage | Stop calling after N failures, recheck periodically |
+| **Idempotent writes** | At-least-once delivery causing duplicates | Use a unique event ID as a deduplication key |

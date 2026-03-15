@@ -901,4 +901,157 @@ This pattern is useful when the same transformed data must land in both an analy
 
 ---
 
-**Related notes:** [[Apache Spark Fundamentals]] | [[Airflow Orchestration Patterns]] | [[Terraform for Data Infrastructure]] | [[Docker & Container Patterns]] | [[Apache Kafka Fundamentals]] | [[CI/CD for Data Pipelines]]
+## Cloud Composer (Managed Airflow)
+
+Cloud Composer is Google Cloud's fully managed [[Airflow Orchestration Patterns|Apache Airflow]] service, built on GKE. It handles Airflow infrastructure -- web server, scheduler, workers, metadata database, and Redis queue -- so teams focus on DAG development rather than cluster operations.
+
+### Composer 2 Architecture
+
+Composer 2 runs on an **autopilot GKE cluster** with autoscaling workers. Key architectural components:
+
+| Component | Implementation | Notes |
+|-----------|---------------|-------|
+| Web Server | Cloud Run-backed | Always available, independent of workers |
+| Scheduler | GKE Pod | Scales based on DAG parse load |
+| Workers | GKE Pods (CeleryExecutor) | Autoscale between min and max worker counts |
+| Metadata DB | Cloud SQL (PostgreSQL) | Managed, automatic backups |
+| DAG Storage | GCS Bucket | Synced to workers automatically |
+| Logs | Cloud Logging | Integrated, searchable, exportable |
+
+The Airflow metadata database is fully managed -- no need to provision or tune Cloud SQL separately.
+
+### Environment Sizing
+
+| Size | Workers (min-max) | Scheduler CPU/Memory | Use Case |
+|------|-------------------|---------------------|----------|
+| Small | 1-3 | 0.5 vCPU / 2 GB | Development, fewer than 50 DAGs |
+| Medium | 2-6 | 2 vCPU / 7.5 GB | Production, 50-200 DAGs |
+| Large | 3-12 | 4 vCPU / 15 GB | High-throughput, 200+ DAGs, short task intervals |
+
+**Right-sizing tips:**
+- Start with a Small environment and scale up based on scheduler parse time and task queue depth.
+- Monitor `scheduler_heartbeat` and `dag_processing.total_parse_time` metrics.
+- Set `min_workers` to at least 1 in production to avoid cold-start delays.
+
+### DAG Deployment via GCS Sync
+
+Composer syncs DAGs from a GCS bucket. The recommended CI/CD pattern:
+
+```bash
+# 1. CI pipeline uploads DAGs to the Composer bucket on merge to main
+COMPOSER_BUCKET=$(gcloud composer environments describe my-composer-env \
+    --location us-central1 \
+    --format='value(config.dagGcsPrefix)')
+
+gsutil -m rsync -r -d dags/ "${COMPOSER_BUCKET}/"
+```
+
+**Deployment rules:**
+- Store DAGs in version control; CI pushes to the Composer bucket on merge to the main branch.
+- Use `gsutil rsync -d` to mirror the repository state (deletes removed DAGs from the bucket).
+- Avoid uploading DAGs directly to the bucket outside CI -- this bypasses code review and creates drift.
+- DAG parse time affects scheduler performance; keep imports lightweight and avoid top-level database calls.
+
+### Python Package Management
+
+Composer environments support custom PyPI packages. Manage them via the console, CLI, or Terraform:
+
+```bash
+# Install packages via CLI
+gcloud composer environments update my-composer-env \
+    --location us-central1 \
+    --update-pypi-packages-from-file requirements.txt
+```
+
+```
+# requirements.txt -- pin all versions to avoid drift
+apache-airflow-providers-google==10.12.0
+pandas==2.1.4
+requests==2.31.0
+sqlalchemy==2.0.25
+```
+
+**Best practices:**
+- Pin every package version. Composer upgrades can break unpinned dependencies.
+- Test package compatibility in a development environment before promoting to production.
+- Use `constraints.txt` if needed to lock transitive dependencies.
+- Avoid packages that require system-level libraries (C extensions) unless the base Composer image supports them.
+
+### Connections and Secrets via Secret Manager
+
+Use [[GCP Data Services for Data Engineering#5. Secret Manager|Secret Manager]] as the secrets backend instead of storing credentials in the Airflow connections UI:
+
+```python
+# airflow.cfg override (set via Composer environment variable)
+# AIRFLOW__SECRETS__BACKEND=airflow.providers.google.cloud.secrets.secret_manager.CloudSecretManagerBackend
+# AIRFLOW__SECRETS__BACKEND_KWARGS={"connections_prefix": "airflow-connections", "variables_prefix": "airflow-variables", "project_id": "my-project"}
+```
+
+With this configuration:
+- Airflow looks up connections from Secret Manager secrets named `airflow-connections-<conn_id>`.
+- Airflow variables resolve from secrets named `airflow-variables-<var_name>`.
+- The Composer service account needs `roles/secretmanager.secretAccessor` on the relevant secrets.
+- Secrets are never stored in the Airflow metadata database, reducing the blast radius of a database compromise.
+
+### Monitoring and Alerting
+
+Composer exposes metrics to Cloud Monitoring automatically:
+
+| Metric | Alert Threshold | Indicates |
+|--------|----------------|-----------|
+| `environment/healthy` | != 1 | Environment health degradation |
+| `scheduler/heartbeat` | Missing for > 60s | Scheduler crash or hang |
+| `dag_processing/total_parse_time` | > 30s | Slow DAG parsing; too many or heavy DAGs |
+| `worker/task_queue_length` | > 50 sustained | Workers cannot keep up; scale up |
+| `worker/pod_eviction_count` | > 0 | Workers running out of memory |
+
+**Operational monitoring:**
+- Set up Cloud Monitoring alerting policies for the metrics above.
+- Use `gcloud composer environments describe` to check environment health programmatically.
+- Review task instance logs in Cloud Logging for failed task root-cause analysis.
+- Enable Airflow's built-in SLA miss callbacks for business-critical DAGs.
+
+### Cost Optimisation
+
+Composer 2 charges for compute (GKE), database (Cloud SQL), web server (Cloud Run), and GCS storage.
+
+**Cost reduction strategies:**
+- **Right-size the environment.** A Small environment costs roughly 60-70% less than a Large one. Upgrade only when parse times or queue depths demand it.
+- **Minimise worker idle time.** Set `min_workers=1` (not 0, to avoid cold starts, but not higher than needed during off-peak).
+- **Schedule DAGs efficiently.** Stagger DAG start times to avoid thundering-herd spikes that force unnecessary autoscaling.
+- **Use triggerer for deferrable operators.** Deferrable operators (e.g., `BigQueryInsertJobOperator` with `deferrable=True`) release the worker slot while waiting, reducing worker count requirements.
+- **Avoid over-provisioning scheduler resources.** Monitor parse times before increasing scheduler CPU/memory.
+- **Use a single Composer environment per team or domain**, not per DAG or per pipeline. The fixed infrastructure cost is amortised across more workloads.
+- **Delete unused development environments** promptly -- even idle Composer environments incur Cloud SQL and GKE control-plane costs.
+
+### Example: Minimal Composer DAG
+
+```python
+from airflow import DAG
+from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
+from airflow.utils.dates import days_ago
+
+with DAG(
+    dag_id="bq_daily_transform",
+    schedule_interval="@daily",
+    start_date=days_ago(1),
+    catchup=False,
+    tags=["bigquery", "transform"],
+) as dag:
+
+    run_transform = BigQueryInsertJobOperator(
+        task_id="run_transform",
+        configuration={
+            "query": {
+                "query": "CALL `project.dataset.usp_daily_transform`()",
+                "useLegacySql": False,
+            }
+        },
+        location="US",
+        deferrable=True,  # releases worker slot while BQ job runs
+    )
+```
+
+---
+
+**Related notes:** [[Apache Spark Fundamentals]] | [[Airflow Orchestration Patterns]] | [[Terraform for Data Infrastructure]] | [[Docker & Container Patterns]] | [[Apache Kafka Fundamentals]] | [[CI/CD for Data Pipelines]] | [[Cloud Platform Comparison]]

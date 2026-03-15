@@ -441,6 +441,319 @@ State is isolated via the `prefix` field in the GCS backend (`bucket = "gcp-data
 
 ---
 
+## Data Platform Providers
+
+Beyond general cloud infrastructure, Terraform has dedicated providers for data platforms like [[Snowflake SQL Patterns|Snowflake]] and [[Databricks Platform Overview|Databricks]]. These providers manage platform-specific resources declaratively, bringing the same IaC benefits (version control, drift detection, peer review) to data platform governance.
+
+### Snowflake Provider
+
+The Snowflake provider manages the full hierarchy of account-level and database-level objects:
+
+```hcl
+terraform {
+  required_providers {
+    snowflake = {
+      source  = "Snowflake-Labs/snowflake"
+      version = "~> 0.92"
+    }
+  }
+}
+
+provider "snowflake" {
+  account  = var.snowflake_account
+  user     = var.snowflake_user
+  password = var.snowflake_password
+  role     = "SYSADMIN"
+}
+```
+
+#### Databases, Schemas, and Warehouses
+
+```hcl
+# Database per tier
+resource "snowflake_database" "persistent_staging" {
+  name                        = "${var.environment}_T2_PERSISTENT_STAGING"
+  comment                     = "Persistent staging — cleaned source data"
+  data_retention_time_in_days = var.environment == "PROD" ? 30 : 1
+}
+
+# Schema within database
+resource "snowflake_schema" "logistics" {
+  database = snowflake_database.persistent_staging.name
+  name     = "LOGISTICS"
+  comment  = "Logistics domain models"
+}
+
+# Warehouse with environment-specific sizing
+resource "snowflake_warehouse" "transform" {
+  name                = "TRN_${var.environment}_CENTRAL_WH"
+  warehouse_size      = var.environment == "PROD" ? "SMALL" : "X-SMALL"
+  auto_suspend        = var.environment == "PROD" ? 120 : 60
+  auto_resume         = true
+  initially_suspended = true
+  max_cluster_count   = var.environment == "PROD" ? 3 : 1
+  min_cluster_count   = 1
+  scaling_policy      = "STANDARD"
+
+  lifecycle {
+    prevent_destroy = var.environment == "PROD" ? true : false
+  }
+}
+```
+
+#### Roles and Grants
+
+```hcl
+# Functional role hierarchy
+resource "snowflake_role" "engineer" {
+  name    = "${var.environment}_ENGINEER"
+  comment = "Data engineering read/write access"
+}
+
+resource "snowflake_role" "analyst" {
+  name    = "${var.environment}_ANALYST"
+  comment = "Read-only analytical access"
+}
+
+# Grant role to parent role (hierarchy)
+resource "snowflake_role_grants" "engineer_to_sysadmin" {
+  role_name = snowflake_role.engineer.name
+  roles     = ["SYSADMIN"]
+}
+
+# Database-level grants
+resource "snowflake_grant_privileges_to_account_role" "engineer_db" {
+  account_role_name = snowflake_role.engineer.name
+  privileges        = ["USAGE", "CREATE SCHEMA"]
+  on_account_object {
+    object_type = "DATABASE"
+    object_name = snowflake_database.persistent_staging.name
+  }
+}
+
+# Schema-level grants (using for_each for multiple schemas)
+resource "snowflake_grant_privileges_to_account_role" "analyst_read" {
+  for_each          = toset(["LOGISTICS", "FINANCE", "MARKETING"])
+  account_role_name = snowflake_role.analyst.name
+  privileges        = ["USAGE"]
+  on_schema {
+    schema_name = "\"${snowflake_database.persistent_staging.name}\".\"${each.key}\""
+  }
+}
+```
+
+#### Stages and Pipes (Snowpipe)
+
+```hcl
+# External stage pointing to S3
+resource "snowflake_stage" "raw_data" {
+  name        = "RAW_DATA_STAGE"
+  database    = snowflake_database.persistent_staging.name
+  schema      = snowflake_schema.logistics.name
+  url         = "s3://${var.s3_bucket}/raw/"
+  credentials = "AWS_KEY_ID='${var.aws_key}' AWS_SECRET_KEY='${var.aws_secret}'"
+}
+
+# Snowpipe for continuous ingestion
+resource "snowflake_pipe" "orders_pipe" {
+  database       = snowflake_database.persistent_staging.name
+  schema         = snowflake_schema.logistics.name
+  name           = "ORDERS_PIPE"
+  auto_ingest    = true
+  copy_statement = <<-SQL
+    COPY INTO ${snowflake_database.persistent_staging.name}.${snowflake_schema.logistics.name}.RAW_ORDERS
+    FROM @${snowflake_stage.raw_data.fully_qualified_name}
+    FILE_FORMAT = (TYPE = 'PARQUET')
+  SQL
+}
+```
+
+### Databricks Provider
+
+The Databricks provider manages workspace resources, compute, and Unity Catalog objects:
+
+```hcl
+terraform {
+  required_providers {
+    databricks = {
+      source  = "databricks/databricks"
+      version = "~> 1.50"
+    }
+  }
+}
+
+provider "databricks" {
+  host  = var.databricks_host
+  token = var.databricks_token
+}
+```
+
+#### Clusters and Instance Pools
+
+```hcl
+# Instance pool for cost-effective compute
+resource "databricks_instance_pool" "etl_pool" {
+  instance_pool_name = "etl-worker-pool"
+  min_idle_instances = 0
+  max_capacity       = 20
+  node_type_id       = "i3.xlarge"
+
+  idle_instance_autotermination_minutes = 10
+
+  aws_attributes {
+    spot_bid_max_price = -1  # use on-demand price as max bid
+    availability       = "SPOT_WITH_FALLBACK"
+    zone_id            = "auto"
+  }
+}
+
+# Job cluster configuration
+resource "databricks_cluster" "interactive" {
+  cluster_name            = "${var.environment}-interactive"
+  spark_version           = "14.3.x-scala2.12"
+  node_type_id            = "m5.xlarge"
+  autotermination_minutes = 30
+  num_workers             = 0  # single-node for dev
+
+  autoscale {
+    min_workers = 1
+    max_workers = 8
+  }
+
+  spark_conf = {
+    "spark.databricks.delta.optimizeWrite.enabled" = "true"
+    "spark.databricks.delta.autoCompact.enabled"   = "true"
+  }
+
+  custom_tags = {
+    Environment = var.environment
+    ManagedBy   = "terraform"
+  }
+}
+```
+
+#### Jobs and Notebooks
+
+```hcl
+# Databricks job with task orchestration
+resource "databricks_job" "daily_etl" {
+  name = "daily-etl-pipeline"
+
+  schedule {
+    quartz_cron_expression = "0 0 6 * * ?"
+    timezone_id            = "Australia/Sydney"
+  }
+
+  task {
+    task_key = "ingest"
+    notebook_task {
+      notebook_path = "/Repos/production/etl/01_ingest"
+    }
+    new_cluster {
+      spark_version = "14.3.x-scala2.12"
+      node_type_id  = "m5.xlarge"
+      num_workers   = 4
+    }
+  }
+
+  task {
+    task_key = "transform"
+    depends_on {
+      task_key = "ingest"
+    }
+    notebook_task {
+      notebook_path = "/Repos/production/etl/02_transform"
+    }
+    existing_cluster_id = databricks_cluster.interactive.id
+  }
+
+  email_notifications {
+    on_failure = [var.alert_email]
+  }
+}
+
+# Notebook deployment from local files
+resource "databricks_notebook" "etl_ingest" {
+  path     = "/Repos/production/etl/01_ingest"
+  language = "PYTHON"
+  source   = "${path.module}/notebooks/01_ingest.py"
+}
+```
+
+#### Unity Catalog and SQL Warehouses
+
+```hcl
+# Unity Catalog objects
+resource "databricks_catalog" "analytics" {
+  name    = "${var.environment}_analytics"
+  comment = "Analytics catalogue for ${var.environment}"
+}
+
+resource "databricks_schema" "gold" {
+  catalog_name = databricks_catalog.analytics.name
+  name         = "gold"
+  comment      = "Curated business-ready tables"
+}
+
+resource "databricks_grants" "gold_schema" {
+  schema = "${databricks_catalog.analytics.name}.${databricks_schema.gold.name}"
+  grant {
+    principal  = "analysts"
+    privileges = ["SELECT", "USE_SCHEMA"]
+  }
+  grant {
+    principal  = "engineers"
+    privileges = ["ALL_PRIVILEGES"]
+  }
+}
+
+# SQL warehouse for BI queries
+resource "databricks_sql_endpoint" "bi_warehouse" {
+  name             = "${var.environment}-bi-warehouse"
+  cluster_size     = "Small"
+  max_num_clusters = var.environment == "PROD" ? 3 : 1
+  auto_stop_mins   = 15
+
+  tags {
+    custom_tags {
+      key   = "Environment"
+      value = var.environment
+    }
+  }
+}
+```
+
+### State Management for Platform Resources
+
+Data platform resources require special state management considerations:
+
+- **Sensitive values in state** — Snowflake passwords, Databricks tokens, and AWS keys appear in plaintext in `terraform.tfstate`. Always use a remote backend with encryption (S3 + KMS, GCS + CMEK).
+- **Import existing resources** — most data platforms are initially configured manually. Use `terraform import` to bring existing databases, warehouses, and roles under Terraform management without recreating them.
+- **Targeted applies** — when managing hundreds of grants, use `terraform apply -target=snowflake_grant_privileges_to_account_role.engineer_db` to apply specific changes without risking unintended modifications.
+- **Refresh before plan** — platform resources can be modified outside Terraform (e.g., DBA changes warehouse size). Run `terraform plan -refresh-only` periodically to detect drift.
+
+### Drift Detection
+
+Drift occurs when platform resources are modified outside Terraform (console changes, SQL scripts, ad-hoc grants):
+
+```bash
+# Detect drift without making changes
+terraform plan -refresh-only
+
+# Common drift sources in data platforms:
+# - Manual warehouse resizing via Snowflake console
+# - Ad-hoc GRANT statements run by DBAs
+# - Databricks cluster policy changes via UI
+# - Auto-scaling changes to SQL warehouse cluster count
+```
+
+Mitigate drift by:
+- Restricting direct console access for managed resources (use Terraform-only roles)
+- Running scheduled drift detection in CI (e.g., nightly `terraform plan` with notifications)
+- Using `lifecycle { ignore_changes }` for attributes that legitimately change outside Terraform (e.g., `last_modified` timestamps)
+
+---
+
 ## Variable Validation
 
 Terraform `validation` blocks catch bad input at `plan` time. Five validation strategies used across the project:

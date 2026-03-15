@@ -602,3 +602,213 @@ spec:
 - Run **kubecost** or cloud-native cost tools to attribute spend per namespace/team
 - **Cluster Autoscaler** scales nodes down during off-hours; pair with CronJobs that run during business hours
 - Tag namespaces with cost-center labels for chargeback reporting
+
+---
+
+## Spark on Kubernetes
+
+Running Apache Spark natively on Kubernetes replaces YARN as the cluster manager, using K8s pods as Spark drivers and executors. This unifies compute infrastructure — the same cluster runs Spark, Airflow, APIs, and ML workloads.
+
+See also: [[Apache Spark Architecture]], [[PySpark Core Concepts]]
+
+### spark-submit with Kubernetes
+
+Submit Spark applications directly using `--master k8s://`:
+
+```bash
+spark-submit \
+  --master k8s://https://k8s-api-server:6443 \
+  --deploy-mode cluster \
+  --name etl-daily-transform \
+  --conf spark.kubernetes.namespace=spark-jobs \
+  --conf spark.kubernetes.container.image=my-registry/spark:3.5.1 \
+  --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark-sa \
+  --conf spark.driver.cores=2 \
+  --conf spark.driver.memory=4g \
+  --conf spark.executor.cores=4 \
+  --conf spark.executor.memory=8g \
+  --conf spark.executor.instances=10 \
+  --conf spark.kubernetes.file.upload.path=s3a://spark-staging/uploads \
+  local:///opt/spark/app/daily_transform.py
+```
+
+The `local://` path references a file inside the container image. For external files, use `s3a://` or `hdfs://` paths.
+
+### Spark Operator (SparkApplication CRD)
+
+The Spark Operator (maintained by Kubeflow) provides a Kubernetes-native way to manage Spark applications using Custom Resource Definitions:
+
+```yaml
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: daily-etl
+  namespace: spark-jobs
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: my-registry/spark:3.5.1
+  mainApplicationFile: local:///opt/spark/app/daily_transform.py
+  sparkVersion: "3.5.1"
+
+  driver:
+    cores: 2
+    memory: "4g"
+    serviceAccount: spark-sa
+    labels:
+      app: daily-etl
+      component: driver
+    nodeSelector:
+      workload-type: spark-driver
+
+  executor:
+    cores: 4
+    memory: "8g"
+    instances: 10
+    labels:
+      app: daily-etl
+      component: executor
+    nodeSelector:
+      workload-type: spark-executor
+
+  restartPolicy:
+    type: OnFailure
+    onFailureRetries: 3
+    onFailureRetryInterval: 30
+    onSubmissionFailureRetries: 2
+
+  monitoring:
+    exposeDriverMetrics: true
+    exposeExecutorMetrics: true
+    prometheus:
+      jmxExporterJar: /prometheus/jmx_prometheus_javaagent.jar
+      port: 8090
+```
+
+Install the operator via Helm: `helm install spark-operator spark-operator/spark-operator --namespace spark-operator --create-namespace`
+
+The operator also supports `ScheduledSparkApplication` for cron-based scheduling, eliminating the need for an external scheduler for simple recurring jobs.
+
+### Driver and Executor Pod Lifecycle
+
+```
+spark-submit / SparkApplication
+        │
+        ▼
+   Driver Pod (created by K8s)
+        │
+        ├── Requests executor pods from K8s API
+        ▼
+   Executor Pods (created dynamically)
+        │
+        ├── Execute tasks, report results to driver
+        ▼
+   Job completes → Executor pods terminated
+                 → Driver pod enters Completed state
+```
+
+- The **driver pod** runs for the lifetime of the application, coordinating task scheduling and result aggregation
+- **Executor pods** are created on demand and destroyed when the application completes
+- Failed executor pods are automatically replaced (configurable via `spark.kubernetes.executor.deleteOnTermination`)
+- Use `restartPolicy: OnFailure` in the SparkApplication CRD for automatic retries
+
+### Dynamic Allocation on Kubernetes
+
+Dynamic allocation scales executors up and down based on workload:
+
+```properties
+spark.dynamicAllocation.enabled=true
+spark.dynamicAllocation.shuffleTracking.enabled=true
+spark.dynamicAllocation.minExecutors=2
+spark.dynamicAllocation.maxExecutors=50
+spark.dynamicAllocation.executorIdleTimeout=60s
+spark.dynamicAllocation.schedulerBacklogTimeout=10s
+```
+
+The `shuffleTracking.enabled` setting is essential on Kubernetes — it replaces the external shuffle service (which requires a DaemonSet) by tracking shuffle data within executors, preventing premature removal of executors holding shuffle data.
+
+### Node Selectors and Tolerations
+
+Route Spark pods to appropriate node pools:
+
+```yaml
+# Node selector — schedule on specific node types
+nodeSelector:
+  workload-type: spark-executor
+  instance-family: r5
+
+# Tolerations — allow scheduling on tainted (dedicated) nodes
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "spark"
+    effect: "NoSchedule"
+```
+
+Common patterns:
+- **Driver pods** on smaller, on-demand instances (reliable, low cost)
+- **Executor pods** on larger, spot/preemptible instances (cost-effective, tolerant of interruption)
+- Use **taints** on spot nodes (`dedicated=spark:NoSchedule`) so only Spark executors with matching tolerations are scheduled there
+
+### Volume Mounts for Data
+
+```yaml
+volumes:
+  - name: spark-data
+    persistentVolumeClaim:
+      claimName: spark-scratch-pvc
+  - name: spark-config
+    configMap:
+      name: spark-defaults
+
+volumeMounts:
+  - name: spark-data
+    mountPath: /data/scratch
+  - name: spark-config
+    mountPath: /opt/spark/conf
+```
+
+For large datasets, prefer object storage (S3, GCS) over PVCs. Use PVCs for checkpoint directories and local scratch space during shuffles.
+
+### Monitoring with Prometheus
+
+Expose Spark metrics via the JMX Prometheus exporter:
+
+1. Include `jmx_prometheus_javaagent.jar` in the Spark container image
+2. Configure the exporter in the SparkApplication (see CRD example above)
+3. Add Prometheus `ServiceMonitor` to scrape Spark pods:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: spark-metrics
+  namespace: spark-jobs
+spec:
+  selector:
+    matchLabels:
+      app: daily-etl
+  endpoints:
+    - port: metrics
+      interval: 15s
+```
+
+Key metrics to monitor: `spark_driver_DAGScheduler_activeJobs`, `spark_executor_cpuTime`, `spark_executor_memoryUsed`, `spark_executor_shuffleBytesWritten`.
+
+### Spark on Kubernetes vs YARN
+
+| Aspect | Spark on Kubernetes | Spark on YARN |
+|--------|---------------------|---------------|
+| **Infrastructure** | Shared K8s cluster | Dedicated Hadoop cluster |
+| **Resource isolation** | Container-level (cgroups, namespaces) | YARN queues and resource pools |
+| **Scaling** | K8s cluster autoscaler + dynamic allocation | Fixed cluster or manual scaling |
+| **Container images** | Custom Docker images per application | Shared Hadoop classpath |
+| **Multi-tenancy** | Namespaces, RBAC, network policies | YARN queues, Kerberos |
+| **Spot/preemptible** | Native support via node pools | Limited (depends on cloud provider) |
+| **Dependency management** | Each job has its own container image | Shared classpath, dependency conflicts |
+| **Operational overhead** | Managed K8s (EKS, GKE) reduces ops | Requires Hadoop admin expertise |
+| **Ecosystem integration** | Runs alongside non-Spark workloads | Spark/Hadoop ecosystem only |
+| **Maturity** | GA since Spark 3.1 (2021) | Mature, battle-tested |
+
+**When to choose K8s:** existing Kubernetes infrastructure, desire for unified compute platform, need for custom container images, or cloud-native deployments. **When to choose YARN:** existing Hadoop investment, heavy HDFS usage, or on-premises deployments with established Hadoop operations.

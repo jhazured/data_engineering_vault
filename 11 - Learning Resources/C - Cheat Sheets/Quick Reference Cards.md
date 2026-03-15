@@ -611,3 +611,278 @@ addopts = "-v --tb=short"
 > [!tip] `uv` is rapidly becoming the standard for Python packaging in data engineering due to its speed and compatibility with both pip and Poetry workflows. See [[Python Development Environment]] for setup guidance.
 
 ---
+
+## PySpark Quick Reference
+
+### Read and Write
+
+```python
+# Read
+df = spark.read.parquet("s3://bucket/data/")
+df = spark.read.csv("path/", header=True, inferSchema=True)
+df = spark.read.json("path/")
+df = spark.read.format("delta").load("path/")
+df = spark.read.jdbc(url, "schema.table", properties=props)
+df = spark.table("catalogue.schema.table")
+
+# Write
+df.write.parquet("s3://bucket/output/", mode="overwrite")
+df.write.format("delta").mode("append").partitionBy("date").save("path/")
+df.write.saveAsTable("catalogue.schema.table")
+df.write.csv("path/", header=True, mode="overwrite")
+```
+
+### Transformations
+
+```python
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+# Select, filter, alias
+df.select("col1", F.col("col2").alias("renamed"))
+df.filter(F.col("status") == "active")
+df.filter(F.col("amount").between(100, 500))
+df.where("date >= '2026-01-01'")
+
+# Add and modify columns
+df.withColumn("upper_name", F.upper("name"))
+df.withColumn("year", F.year("event_date"))
+df.withColumnRenamed("old_name", "new_name")
+df.drop("unwanted_col")
+
+# Aggregations
+df.groupBy("category").agg(
+    F.count("*").alias("cnt"),
+    F.sum("amount").alias("total"),
+    F.avg("amount").alias("avg_amount"),
+)
+
+# Deduplication
+df.dropDuplicates(["id", "event_date"])
+df.distinct()
+```
+
+### Actions
+
+```python
+df.show(20, truncate=False)          # Display rows
+df.count()                           # Row count
+df.collect()                         # All rows to driver (use with care)
+df.take(5)                           # First 5 rows to driver
+df.describe("amount").show()         # Summary statistics
+df.printSchema()                     # Column names and types
+df.explain(True)                     # Physical + logical plan
+```
+
+### Window Functions
+
+```python
+w = Window.partitionBy("customer_id").orderBy(F.desc("order_date"))
+
+df.withColumn("row_num", F.row_number().over(w))
+df.withColumn("rank", F.rank().over(w))
+df.withColumn("dense_rank", F.dense_rank().over(w))
+df.withColumn("prev_amount", F.lag("amount", 1).over(w))
+df.withColumn("next_amount", F.lead("amount", 1).over(w))
+
+# Running total
+w_running = Window.partitionBy("account").orderBy("txn_date").rowsBetween(
+    Window.unboundedPreceding, Window.currentRow
+)
+df.withColumn("running_total", F.sum("amount").over(w_running))
+```
+
+### Joins
+
+```python
+joined = left.join(right, on="id", how="inner")
+joined = left.join(right, left.key == right.key, "left")
+joined = left.join(right, ["col1", "col2"], "full_outer")
+
+# Anti join (rows in left not in right)
+anti = left.join(right, on="id", how="left_anti")
+
+# Broadcast small table
+from pyspark.sql.functions import broadcast
+joined = large.join(broadcast(small), on="id")
+```
+
+### UDFs
+
+```python
+from pyspark.sql.types import StringType
+
+# Standard UDF (serialises to Python — slower)
+@F.udf(returnType=StringType())
+def clean_phone(phone):
+    return phone.replace("-", "").replace(" ", "") if phone else None
+
+df.withColumn("clean_phone", clean_phone("phone"))
+
+# Pandas UDF (vectorised — much faster)
+import pandas as pd
+from pyspark.sql.functions import pandas_udf
+
+@pandas_udf(StringType())
+def normalise_name(s: pd.Series) -> pd.Series:
+    return s.str.strip().str.title()
+
+df.withColumn("normalised", normalise_name("name"))
+```
+
+### spark-submit
+
+```bash
+spark-submit \
+    --master yarn \
+    --deploy-mode cluster \
+    --num-executors 10 \
+    --executor-memory 8g \
+    --executor-cores 4 \
+    --driver-memory 4g \
+    --conf spark.sql.shuffle.partitions=200 \
+    --conf spark.dynamicAllocation.enabled=true \
+    --py-files libs.zip \
+    main_job.py --date 2026-03-15
+```
+
+> [!tip] See [[PySpark Architecture and Core Concepts]] and [[PySpark DataFrame Operations]] for in-depth coverage.
+
+---
+
+## Airflow Quick Reference
+
+### CLI Commands
+
+```bash
+# DAG management
+airflow dags list                             # List all DAGs
+airflow dags trigger my_dag                   # Trigger DAG run
+airflow dags trigger my_dag --conf '{"key":"value"}'  # With config
+airflow dags pause my_dag                     # Pause scheduling
+airflow dags unpause my_dag                   # Resume scheduling
+airflow dags test my_dag 2026-03-15           # Test DAG for a date (no DB writes)
+airflow dags backfill my_dag -s 2026-01-01 -e 2026-03-01  # Backfill date range
+
+# Task management
+airflow tasks list my_dag                     # List tasks in DAG
+airflow tasks test my_dag my_task 2026-03-15  # Test single task (no DB writes)
+airflow tasks run my_dag my_task 2026-03-15   # Run single task
+airflow tasks clear my_dag -t my_task -s 2026-03-15  # Clear task for re-run
+airflow tasks failed-deps my_dag my_task 2026-03-15  # Show unmet dependencies
+
+# Database and config
+airflow db init                               # Initialise metadata database
+airflow db upgrade                            # Apply migrations
+airflow config list                           # Show all config settings
+
+# Connections and variables
+airflow connections list                      # List connections
+airflow connections add my_conn --conn-type postgres --conn-host localhost
+airflow variables set MY_VAR "value"          # Set variable
+airflow variables get MY_VAR                  # Get variable
+```
+
+### DAG Structure
+
+```python
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.utils.dates import days_ago
+from datetime import timedelta
+
+default_args = {
+    "owner": "data-team",
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+    "email_on_failure": True,
+    "email": ["data-alerts@example.com"],
+}
+
+with DAG(
+    dag_id="daily_ingestion",
+    default_args=default_args,
+    schedule_interval="0 6 * * *",            # 06:00 UTC daily
+    start_date=days_ago(1),
+    catchup=False,
+    tags=["ingestion", "production"],
+    max_active_runs=1,
+) as dag:
+    extract = PythonOperator(task_id="extract", python_callable=extract_fn)
+    transform = PythonOperator(task_id="transform", python_callable=transform_fn)
+    load = PythonOperator(task_id="load", python_callable=load_fn)
+
+    extract >> transform >> load
+```
+
+### Common Operators
+
+| Operator | Purpose |
+|----------|---------|
+| `PythonOperator` | Run a Python callable |
+| `BashOperator` | Execute a shell command |
+| `DbtCloudRunJobOperator` | Trigger a dbt Cloud job |
+| `SnowflakeOperator` | Execute SQL on Snowflake |
+| `S3ToSnowflakeOperator` | Load S3 files into Snowflake |
+| `HttpSensor` | Wait for an HTTP endpoint to return success |
+| `ExternalTaskSensor` | Wait for a task in another DAG |
+| `EmailOperator` | Send an email notification |
+| `TriggerDagRunOperator` | Trigger another DAG |
+| `BranchPythonOperator` | Conditional branching based on return value |
+
+### Connections and Variables
+
+```python
+from airflow.hooks.base import BaseHook
+from airflow.models import Variable
+
+# Connections — stored credentials (UI, CLI, or env vars)
+conn = BaseHook.get_connection("my_postgres")
+host = conn.host
+password = conn.password
+
+# Environment variable format:
+# AIRFLOW_CONN_MY_POSTGRES='postgresql://user:pass@host:5432/db'
+
+# Variables — key-value config
+env = Variable.get("ENVIRONMENT", default_var="dev")
+config = Variable.get("pipeline_config", deserialize_json=True)
+```
+
+### Trigger Rules
+
+| Rule | Fires When |
+|------|-----------|
+| `all_success` (default) | All upstream tasks succeeded |
+| `all_failed` | All upstream tasks failed |
+| `all_done` | All upstream tasks completed (any state) |
+| `one_success` | At least one upstream succeeded |
+| `one_failed` | At least one upstream failed |
+| `none_failed` | No upstream task failed (success or skipped) |
+| `none_skipped` | No upstream task was skipped |
+
+### XCom (Cross-Communication)
+
+```python
+# Push — return value from PythonOperator is auto-pushed
+def extract_fn(**context):
+    row_count = run_extraction()
+    return row_count  # Automatically pushed as XCom
+
+# Pull — retrieve in downstream task
+def transform_fn(**context):
+    row_count = context["ti"].xcom_pull(task_ids="extract")
+    print(f"Processing {row_count} rows")
+
+# Explicit push
+def custom_push(**context):
+    context["ti"].xcom_push(key="file_path", value="s3://bucket/output.parquet")
+
+# Pull specific key
+def custom_pull(**context):
+    path = context["ti"].xcom_pull(task_ids="custom_push", key="file_path")
+```
+
+> [!tip] See [[Apache Airflow Fundamentals]] and [[Apache Airflow Deep Dive]] for DAG design patterns and production configuration.
+
+---

@@ -557,9 +557,159 @@ If you're building a confidential client (like a backend app):
 
 ---
 
+## Webhook Patterns
+
+A webhook is an HTTP callback — when an event occurs, the source system sends an HTTP POST to a pre-registered URL on the consumer's side. This inverts the typical REST polling pattern.
+
+### Event Delivery Flow
+
+```
+1. Consumer registers callback URL with provider
+   POST /api/webhooks  { "url": "https://myapp.com/hooks/orders", "events": ["order.created"] }
+
+2. Event occurs on provider side
+
+3. Provider sends HTTP POST to registered URL
+   POST https://myapp.com/hooks/orders
+   Content-Type: application/json
+   X-Webhook-Signature: sha256=abc123...
+
+   { "event": "order.created", "data": { "order_id": "ORD-99" }, "timestamp": "..." }
+
+4. Consumer returns 200 OK to acknowledge receipt
+```
+
+### Retry Logic
+
+Providers should implement exponential back-off when the consumer endpoint is unreachable or returns an error.
+
+| Attempt | Delay | Total Elapsed |
+|---------|-------|---------------|
+| 1 | Immediate | 0 s |
+| 2 | 30 s | 30 s |
+| 3 | 2 min | 2.5 min |
+| 4 | 15 min | 17.5 min |
+| 5 | 1 hour | ~1.3 hours |
+
+After all retries are exhausted, the event should be written to a dead-letter store and an alert raised. Most providers (Stripe, GitHub, Twilio) give a retry window of 24-72 hours.
+
+### Signature Verification
+
+To prevent spoofed webhook deliveries, providers sign the payload with a shared secret using HMAC-SHA256.
+
+```python
+import hmac
+import hashlib
+
+def verify_webhook(payload: bytes, signature: str, secret: str) -> bool:
+    """Verify that the webhook payload was signed by the expected provider."""
+    expected = hmac.new(
+        key=secret.encode("utf-8"),
+        msg=payload,
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature)
+```
+
+### Idempotency Keys
+
+Webhook consumers must handle duplicate deliveries (caused by retries or network issues). Every webhook event should carry a unique `event_id` that the consumer uses as a deduplication key.
+
+```python
+def handle_webhook(event: dict) -> None:
+    event_id = event["event_id"]
+    if already_processed(event_id):  # Check database / cache
+        return  # Skip duplicate
+    process_event(event)
+    mark_processed(event_id)
+```
+
+### Webhook vs Polling Comparison
+
+| Aspect | Webhooks | Polling |
+|--------|----------|---------|
+| **Timeliness** | Near real-time | Depends on poll interval |
+| **Efficiency** | Only fires when events occur | Wastes requests when nothing has changed |
+| **Complexity** | Consumer must expose a public endpoint | Consumer only needs outbound HTTP |
+| **Reliability** | Requires retry logic and idempotency | Simpler — consumer controls timing |
+| **Firewall** | Inbound traffic must be allowed | Only outbound traffic needed |
+| **Best for** | Event-driven integrations, real-time triggers | Batch syncs, environments with strict inbound rules |
+
+---
+
+## API Versioning Strategies
+
+As APIs evolve, breaking changes must be managed without disrupting existing consumers. A clear versioning strategy is essential for any production API.
+
+### URL Path Versioning
+
+The version number is embedded in the URL path. This is the most common approach.
+
+```
+GET /api/v1/users/123
+GET /api/v2/users/123
+```
+
+**Pros:** Explicit, easy to route, cacheable, simple to understand.
+**Cons:** URL changes on every version bump; can lead to code duplication.
+
+### Header Versioning
+
+The version is specified in a custom request header, keeping the URL clean.
+
+```http
+GET /api/users/123
+X-API-Version: 2
+```
+
+**Pros:** Clean URLs; version is metadata, not part of the resource path.
+**Cons:** Less discoverable; harder to test in a browser; caching proxies may ignore custom headers.
+
+### Content Negotiation (Accept Header)
+
+The version is embedded in the media type via the `Accept` header. GitHub uses this approach.
+
+```http
+GET /api/users/123
+Accept: application/vnd.myapi.v2+json
+```
+
+**Pros:** Follows HTTP semantics; URL stays stable.
+**Cons:** More complex to implement; less intuitive for consumers.
+
+### Versioning Strategy Comparison
+
+| Strategy | URL Stability | Discoverability | Caching | Adoption |
+|----------|--------------|-----------------|---------|----------|
+| **URL path** | Changes per version | High | Easy | Most common |
+| **Custom header** | Stable | Low | Needs Vary header | Moderate |
+| **Content negotiation** | Stable | Low | Needs Vary header | Rare |
+| **Query parameter** (`?v=2`) | Stable | Moderate | Risky (cache key issues) | Uncommon |
+
+### Deprecation Policy
+
+A structured deprecation lifecycle protects consumers from surprise breakages.
+
+1. **Announce** — publish deprecation notice in API docs and response headers (`Deprecation: true`, `Sunset: 2026-09-01`)
+2. **Overlap period** — run old and new versions concurrently (minimum 6-12 months for public APIs)
+3. **Monitor** — track usage of deprecated endpoints; notify active consumers directly
+4. **Retire** — return `410 Gone` for sunset endpoints; remove from documentation
+
+> [!tip] Deprecation Headers
+> The `Sunset` HTTP header (RFC 8594) communicates the retirement date machine-readably:
+> ```http
+> Sunset: Sat, 01 Sep 2026 00:00:00 GMT
+> Deprecation: true
+> Link: <https://api.example.com/docs/migration-v3>; rel="successor-version"
+> ```
+
+---
+
 ## Related Topics
 
 - [[SOAP (Simple Object Access Protocol)|SOAP]] - Compare with SOAP web services
 - [[gRPC & GraphQL]] - Modern API protocols (binary, schema-first)
 - [[Data Contracts & Schema Enforcement]] - Schema enforcement across API boundaries
 - [[Trust Stores & Certificate Management]] - SSL/TLS for HTTPS connections
+- [[WebSocket & Server-Sent Events]] - Real-time alternatives to REST polling
+- [[Event-Driven Architecture]] - Broader event-driven patterns including webhooks

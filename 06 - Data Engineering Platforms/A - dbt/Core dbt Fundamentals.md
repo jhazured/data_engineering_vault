@@ -303,3 +303,113 @@ dbt run --full-refresh --select my_model    # Rebuild incremental from scratch
 | **Snapshots** | Timestamp strategy when `updated_at` is reliable; check strategy otherwise |
 | **Schema override** | `generate_schema_name` macro controls how schemas are named across environments |
 | **Hooks** | `on-run-end` for pipeline logging and post-run automation |
+
+## dbt Cloud
+
+dbt Cloud is the managed SaaS platform built on top of [[Core dbt Fundamentals|dbt Core]], adding a browser-based IDE, job orchestration, metadata services, and governance features. It removes the need to self-host dbt execution infrastructure.
+
+### Cloud IDE
+
+The Cloud IDE provides a browser-based development environment with:
+
+- Inline SQL compilation and preview (see compiled SQL before running)
+- Git integration — branch, commit, and create pull requests without leaving the browser
+- Auto-complete for `ref()`, `source()`, and macro calls
+- Integrated DAG visualisation for the current model and its upstream/downstream dependencies
+- Environment-aware — queries run against the configured development warehouse target
+
+### Job Scheduling
+
+dbt Cloud supports two scheduling paradigms:
+
+- **Cron-based scheduling** — standard cron expressions (`0 6 * * *`) for time-driven execution. Supports timezone configuration and concurrency controls (max one run at a time to prevent warehouse contention).
+- **Event-driven triggers** — jobs can be triggered via the dbt Cloud API, webhooks from upstream systems (e.g., Fivetran sync completion), or as downstream dependencies of other dbt Cloud jobs. This enables orchestration patterns where ingestion completion triggers transformation.
+
+Jobs can be scoped to run specific selectors (`--select tag:nightly` or `--select staging+`), and each job targets a specific environment (staging, production).
+
+### Metadata API and Discovery API
+
+dbt Cloud exposes two complementary APIs for programmatic access to project metadata:
+
+- **Metadata API** — GraphQL API returning model definitions, column-level lineage, test results, execution timing, and freshness check outcomes. Useful for building custom dashboards or integrating with data catalogues.
+- **Discovery API** — provides search and exploration capabilities across dbt projects. Supports filtering by resource type, tags, and ownership. Powers the dbt Explorer interface and can be consumed by external tools.
+
+### Semantic Layer
+
+The dbt Semantic Layer (powered by MetricFlow) defines metrics centrally in YAML:
+
+```yaml
+semantic_models:
+  - name: orders
+    defaults:
+      agg_time_dimension: order_date
+    entities:
+      - name: order_id
+        type: primary
+    measures:
+      - name: order_total
+        agg: sum
+        expr: order_amount
+    dimensions:
+      - name: order_date
+        type: time
+
+metrics:
+  - name: total_revenue
+    type: simple
+    type_params:
+      measure: order_total
+```
+
+Downstream tools (Tableau, Looker, Hex, custom applications) query the Semantic Layer via JDBC/API, ensuring consistent metric definitions across all consumers. This eliminates the "same metric, different numbers" problem.
+
+### Multi-Tenancy
+
+dbt Cloud supports single-tenant and multi-tenant deployments:
+
+- **Multi-tenant** — shared infrastructure, logical isolation per account. Suitable for most teams.
+- **Single-tenant** — dedicated infrastructure in a customer-specified cloud region. Required for strict data residency or compliance requirements (SOC 2 Type II, HIPAA).
+
+### dbt Explorer
+
+dbt Explorer provides a unified interface for navigating project metadata:
+
+- **Column-level lineage** — trace a specific column from source through staging, intermediate, and mart layers
+- **Auto-generated documentation** — model descriptions, column descriptions, and test coverage rendered as a searchable catalogue
+- **Performance insights** — execution time trends, model build durations, and bottleneck identification
+- **Freshness monitoring** — source freshness check results displayed alongside lineage
+
+### CI/CD with Slim CI
+
+dbt Cloud's Slim CI feature compares the current pull request against the production environment's manifest to identify only the models that have changed:
+
+```bash
+# Slim CI runs only modified models and their downstream dependents
+dbt run --select state:modified+ --defer --state prod-manifest/
+dbt test --select state:modified+ --defer --state prod-manifest/
+```
+
+- **`state:modified`** — selects models where SQL or configuration has changed compared to the production manifest
+- **`--defer`** — for unmodified upstream models, references point to the production schema rather than rebuilding everything
+- **`state:modified+`** — includes downstream dependents of modified models, catching cascading breakage
+
+This dramatically reduces CI build times — a 500-model project might only need to build and test 5-10 models per pull request.
+
+### dbt Cloud vs dbt Core Comparison
+
+| Aspect | dbt Core | dbt Cloud |
+|--------|----------|-----------|
+| **Hosting** | Self-hosted (CLI, Docker, Airflow) | Managed SaaS |
+| **IDE** | Local editor (VS Code, vim) | Browser-based Cloud IDE |
+| **Scheduling** | External orchestrator (Airflow, cron) | Built-in cron + event-driven |
+| **CI/CD** | DIY with GitHub Actions / GitLab CI | Slim CI with `state:modified` |
+| **Metadata** | `manifest.json` + `run_results.json` files | Metadata API + Discovery API |
+| **Semantic Layer** | MetricFlow CLI (local) | Managed Semantic Layer with JDBC endpoint |
+| **Documentation** | `dbt docs serve` (static site) | dbt Explorer (hosted, always current) |
+| **Cost** | Free (open source) | Tiered pricing (Developer, Team, Enterprise) |
+| **Multi-project** | Manual cross-project refs | dbt Mesh with cross-project refs |
+| **Governance** | Manual (code review) | Environment-level permissions, audit logs |
+
+**When to choose dbt Core:** small teams comfortable with DevOps, existing orchestration infrastructure, cost-sensitive environments, or air-gapped deployments.
+
+**When to choose dbt Cloud:** teams wanting managed infrastructure, faster onboarding, built-in CI/CD, or enterprise governance features. The Slim CI and Semantic Layer capabilities are particularly compelling for larger projects.
