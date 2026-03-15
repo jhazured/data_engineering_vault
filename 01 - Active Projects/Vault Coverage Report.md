@@ -252,44 +252,113 @@ data_engineering_vault/
 
 ---
 
-## Remaining Gaps
+## Roadmap to 10/10
 
-### PySpark Empty Subfolders
+What each section needs to reach a perfect score. Items marked with effort estimates.
 
-| Folder | Expected Content |
-|--------|-----------------|
-| `07/B/05 — GraphFrames Notebooks` | Graph processing with PySpark |
-| `07/B/05 — MLlib Examples` | ML pipelines, feature engineering |
-| `07/B/08 — Security & Governance` (3 subfolders) | Auditing, data masking, row-level security |
-| `07/B/09 — Production Patterns` (4 subfolders) | CI/CD configs, deployment templates, monitoring dashboards |
-| `07/B/11 — MLOps` | Model training, serving, experiment tracking |
-
-### Topics with Limited Coverage
-
-| Topic | Status |
-|-------|--------|
-| **Iceberg / Hudi** | Brief coverage in existing open table formats note |
-| **SFTP / GoAnywhere MFT** | Stub only |
-| **Postman / API testing** | Empty folder at `08/E/A` |
-
----
-
-## Recommended Next Steps
-
-### Priority 1 — Specialist Topics
+### 1. Templates & Patterns (7 → 10)
 
 | # | Action | Effort |
 |---|--------|--------|
-| 1 | Populate PySpark MLOps subfolder | Medium |
-| 2 | Populate PySpark Security & Governance subfolder | Medium |
-| 3 | Expand Iceberg / Hudi to dedicated note | Small |
+| 1 | Add Azure/Fabric reference architecture (T0-T5 as template) | Small |
+| 2 | Add GCP reference architecture (BigQuery + Dataflow + Composer) | Small |
+| 3 | Add multi-tenancy pipeline template | Small |
+| 4 | Add observability-as-code template (Terraform for dashboards + alerts) | Small |
 
-### Priority 2 — Polish
+### 2. Cloud Platforms (7-9 → 10)
 
 | # | Action | Effort |
 |---|--------|--------|
-| 4 | Expand SQL notes (QUALIFY, LATERAL, JSON functions) | Small |
-| 5 | Standardise British English across all notes | Small |
+| 5 | AWS: add hands-on project pattern (Step Functions + Glue + Redshift) | Medium |
+| 6 | AWS: add FinOps patterns (RI strategies, Savings Plans, cost allocation tags) | Small |
+| 7 | GCP: add Cloud Composer (managed Airflow) patterns | Small |
+| 8 | GCP: add Dataflow (Apache Beam) patterns | Medium |
+| 9 | Multi-cloud comparison framework (when to choose AWS vs Azure vs GCP) | Small |
+
+### 3. Data Engineering Core (6-9 → 10)
+
+| # | Action | Effort |
+|---|--------|--------|
+| 10 | Query & Analysis: add general analytical SQL patterns beyond RAG/vector | Small |
+| 11 | Storage: expand Iceberg/Hudi to dedicated deep-dive note | Medium |
+| 12 | Testing: add Great Expectations hands-on with code examples | Small |
+| 13 | Testing: add data profiling patterns (whylogs, pandas-profiling) | Small |
+| 14 | Monitoring: add Datadog/Grafana dashboard patterns | Small |
+| 15 | Security: add platform-agnostic masking policy patterns | Small |
+
+### 4. Data Streaming (7-9 → 10)
+
+| # | Action | Effort |
+|---|--------|--------|
+| 16 | Publish-Subscribe: add hands-on code examples (Python Kafka producer/consumer) | Small |
+| 17 | Kafka: add Connect framework deep dive (source/sink connectors, SMTs) | Medium |
+| 18 | Add GCP Pub/Sub patterns note | Small |
+
+### 5. Data Engineering Platforms (6-9 → 10)
+
+| # | Action | Effort |
+|---|--------|--------|
+| 19 | dbt: add dbt Cloud features (scheduling, metadata API, multi-tenancy) | Small |
+| 20 | Databricks: add MLflow, Feature Store, AutoML patterns | Medium |
+| 21 | Informatica/Matillion/Dataiku: add hands-on migration examples | Medium |
+| 22 | DuckDB: add recipe cookbook (common analytical queries, benchmarks) | Small |
+
+### 6. Programming Languages (7-9 → 10)
+
+| # | Action | Effort |
+|---|--------|--------|
+| 23 | PySpark: populate MLlib subfolder (ML pipelines, feature engineering) | Medium |
+| 24 | PySpark: populate Security & Governance subfolder (auditing, masking) | Medium |
+| 25 | PySpark: populate GraphFrames subfolder (graph processing) | Small |
+| 26 | PySpark: populate MLOps subfolder (training, serving, experiment tracking) | Medium |
+| 27 | Python: add async/await patterns for data engineering | Small |
+| 28 | Python: add packaging guide (poetry, uv, pyproject.toml) | Small |
+
+### 7. DevOps & Orchestration (7-9 → 10)
+
+| # | Action | Effort |
+|---|--------|--------|
+| 29 | API Management: add API gateway patterns (Kong, AWS API Gateway) | Small |
+| 30 | Docker: add Spark-on-K8s detail (spark-submit, operator) | Small |
+| 31 | Terraform: add Snowflake/Databricks provider examples | Small |
+| 32 | CI/CD: add artifact management and blue/green deployment patterns | Small |
+
+### 8. Data Modelling (7-9 → 10)
+
+| # | Action | Effort |
+|---|--------|--------|
+| 33 | ERDs: add Inmon 3NF approach (compare with Kimball) | Small |
+| 34 | ERDs: add modern lakehouse dimensional modelling (how Delta/Iceberg change the game) | Small |
+| 35 | DFD: add more domain-specific examples (healthcare, finance, logistics) | Small |
+| 36 | Sequence Diagrams: add error handling and retry flow examples | Small |
+
+### 9. Protocols (7-8 → 10)
+
+| # | Action | Effort |
+|---|--------|--------|
+| 37 | REST: add webhook patterns and API versioning strategies | Small |
+| 38 | gRPC: add federation and schema stitching depth | Small |
+| 39 | Add WebSocket / Server-Sent Events note for real-time data flows | Small |
+
+### 10. Learning Resources (7-8 → 10)
+
+| # | Action | Effort |
+|---|--------|--------|
+| 40 | Interview Guides: add system design interview patterns (design a data pipeline, design a data lake) | Medium |
+| 41 | Interview Guides: reduce duplication with core notes (cross-link instead) | Small |
+| 42 | Best Practices: expand with per-domain guides (SQL, Python, dbt, Snowflake) | Medium |
+| 43 | Cheat Sheets: add PySpark and Airflow command references | Small |
+| 44 | Add troubleshooting runbooks (Snowflake perf, PySpark OOM, dbt compilation errors) | Medium |
+
+### Summary
+
+**44 items to reach 10/10 across all sections.** Effort breakdown:
+
+| Effort | Count | Estimated Time |
+|--------|------:|----------------|
+| Small | 30 | 1-2 hours each |
+| Medium | 14 | 3-5 hours each |
+| **Total** | **44** | **~100 hours** |
 
 ---
 
