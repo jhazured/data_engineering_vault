@@ -217,6 +217,80 @@ Downstream `NOT EXISTS` checks prevent duplicates even on forced reloads.
 
 ---
 
+## Windowed Load Pattern
+
+Use when `modifiedon`/`updated_at` is unreliable as a watermark but a business date column (e.g. `starttime`, `shift_date`) can serve as a bounded filter. Instead of a single high-watermark, fetch a **rolling date window** on each run.
+
+### When to Use
+
+| Indicator | Windowed Load is Right |
+|-----------|----------------------|
+| `modifiedon` is backdated, missing, or overwritten | Yes |
+| Records are tied to a business date (shifts, schedules, events) | Yes |
+| Client confirms changes only happen within a known recency window | Yes |
+| Table is append-only with reliable timestamps | No — use watermark |
+
+### Control Table Design
+
+Add a `rolling_days` column to your pipeline control table:
+
+```sql
+-- Control table row for a windowed table
+INSERT INTO control.pipeline_control (table_name, load_type, rolling_days, ...)
+VALUES ('service_schedule', 'windowed', 90, ...);
+-- Initial load: set rolling_days = 3650 (10 years) to pull full history
+-- BAU runs: set rolling_days = 90
+```
+
+### API Filter Pattern
+
+```
+GET /table/{table_name}?$filter={table_name}.starttime >= '{today - rolling_days}'
+    &$top={page_size}&$skip={offset}
+```
+
+### SCD2 with Rolling Window — INNER JOIN Protection
+
+The critical constraint: when only a subset of records is fetched (the rolling window), the SCD2 merge must not touch records outside that window. Use an `INNER JOIN` from T1 (staging) to T2 (persistent) so that only records actively present in the staging table are subject to change detection:
+
+```sql
+-- Step 1: Expire changed records (only within the window)
+UPDATE t2
+SET etl_is_current = 0, etl_end_time = GETUTCDATE()
+FROM persistent.{table} t2
+INNER JOIN transient.{table} t1 ON t1.id = t2.id
+WHERE t2.etl_is_current = 1
+  AND t1.etl_hash <> t2.etl_hash;
+
+-- Step 2: Insert new/changed records
+INSERT INTO persistent.{table} (id, ..., etl_is_current, etl_hash, etl_start_time, etl_end_time)
+SELECT t1.id, ..., 1, t1.etl_hash, GETUTCDATE(), NULL
+FROM transient.{table} t1
+WHERE NOT EXISTS (
+    SELECT 1 FROM persistent.{table} t2
+    WHERE t2.id = t1.id AND t2.etl_is_current = 1 AND t2.etl_hash = t1.etl_hash
+);
+```
+
+**Why INNER JOIN matters:** A `LEFT JOIN` or full scan of T2 would expire every record not present in the current window — effectively deleting history older than `rolling_days`. The INNER JOIN ensures records outside the window are never touched.
+
+### Initial Load Handling
+
+On first run, T2 is empty. Set `rolling_days` to a large value (e.g. 3650) to pull full history. The SCD2 Step 1 (expire) finds no matches — correct and expected. Step 2 inserts everything as new. After initial load, reduce `rolling_days` to the BAU value (e.g. 90).
+
+### Bootstrap-Then-Switch Pattern
+
+An alternative to setting a large `rolling_days` for initial load: use a separate **incremental** load pattern for the initial extraction, then switch to windowed for BAU. The control table drives the transition:
+
+1. Set `load_type = 'incremental'` and `last_watermark_ts = '1900-01-01'` in the control table
+2. The incremental pipeline pages through full history using `$filter=starttime >= '{watermark}'` with `$top`/`$skip` pagination
+3. On successful completion, update the control table: `last_watermark_ts = MAX(starttime)` and `load_type = 'windowed'`
+4. All subsequent scheduled runs use the windowed pattern (rolling `today - rolling_days` window)
+
+This separates the initial bulk extraction (which needs watermark tracking for resume-on-failure) from ongoing BAU runs (which use a fixed rolling window relative to today). The `load_type` switch is a single control table UPDATE — no pipeline code changes required.
+
+---
+
 ## Cost Optimisation
 
 From the logistics platform benchmarks -- switching to incremental:

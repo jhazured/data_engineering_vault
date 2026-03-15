@@ -96,6 +96,60 @@ Each step depends on the previous step succeeding. Independent tables within a s
 
 **Error handling:** Configure retry with exponential backoff at the activity level. Log all pipeline executions to `t0.pipeline_log`. T1 truncation happens only after confirmed T2 success, followed by a watermark MERGE into `t0.watermark`.
 
+### Control Table-Driven Pipeline Orchestration
+
+For multi-table pipelines, a metadata-driven control table eliminates per-table pipeline code. One row per table drives runtime behaviour:
+
+```sql
+CREATE TABLE control.pipeline_control (
+    pipeline_name       VARCHAR(100)    NOT NULL,   -- groups tables per pipeline run
+    table_name          VARCHAR(100)    NOT NULL,   -- target table in T1/T2
+    src_table_name      VARCHAR(100)    NULL,       -- source API table name (if different)
+    load_type           VARCHAR(20)     NOT NULL,   -- 'snapshot', 'incremental', 'windowed'
+    watermark_column    VARCHAR(100)    NULL,       -- filter field (NULL for snapshot)
+    primary_key_column  VARCHAR(500)    NULL,       -- PK for SCD2 joins
+    last_watermark_ts   DATETIME2(6)    NOT NULL,   -- last successful watermark
+    last_run_status     VARCHAR(20)     NOT NULL,   -- SUCCESS / FAILED / RUNNING
+    page_size           INT             NOT NULL,   -- API pagination $top
+    do_not_load         INT             NOT NULL,   -- short-term failure flag
+    is_active           INT             NOT NULL,   -- long-term enable/disable
+    column_mapping_json VARCHAR(MAX)    NULL,       -- column mapping + hash source
+    rolling_days        INT             NULL,       -- windowed tables only
+    api_query_suffix    VARCHAR(MAX)    NULL,       -- per-table API query override
+    CONSTRAINT PK_pipeline_control PRIMARY KEY NONCLUSTERED (pipeline_name, table_name) NOT ENFORCED
+);
+```
+
+**Two-flag pattern for failure handling:**
+
+| Flag | Set When | Reset When | Purpose |
+|------|----------|------------|---------|
+| `do_not_load` | T1 transient failure | **Auto-reset to 0 at start of every run** | Prevents T2 from running after failed T1. Auto-recovers next run. |
+| `is_active` | Manual — table excluded | Manual — table re-enabled | Long-term disable. Never auto-reset. |
+
+This separates transient failures (auto-recover) from intentional exclusions (manual control). The `do_not_load` flag is reset at the start of every run via a `script_begin_run` step — if the error is persistent, it will be set back to 1 at the end of that failed run.
+
+**Three load patterns from one pipeline set:**
+
+```
+pl_master_{pattern}
+    ↓ generates job_id for run correlation
+pl_parent_{pattern}_transient    ← ForEach: reads control table, filters by load_type + is_active
+    ↓ passes all table parameters
+pl_child_{pattern}_transient     ← actual ingestion (pagination Until loop)
+    ↓ on success
+pl_parent_{pattern}_persistent   ← ForEach: filters do_not_load=0
+    ↓
+pl_child_{pattern}_persistent    ← SCD2 merge T1 → T2
+```
+
+**Per-table API overrides via `api_query_suffix`:** For source APIs with per-table quirks (e.g. column restrictions, custom filters), store the override in the control table rather than branching pipeline logic. The suffix is appended to the API URL before pagination parameters:
+
+```
+URL without suffix: GET /table/{src_table_name}?$top={page_size}&$skip={offset}
+URL with suffix:    GET /table/{src_table_name}{api_query_suffix}&$top={page_size}&$skip={offset}
+```
+
 ---
 
 ## 4. Dataflows Gen2
@@ -441,6 +495,26 @@ Direct Lake is Fabric's high-performance analytics mode. It reads OneLake Parque
 **Aggregation design:** Pre-compute common summaries as T3 aggregation tables (e.g., monthly payroll by department) or as T5 DirectQuery views for complex aggregations needing SQL pushdown.
 
 **OneLake optimization:** Partition large tables by date, Z-order on frequently filtered columns, use zstd compression. Monitor with DAX Studio (server timings, cache hit rate, SE/FE query split).
+
+### Direct Lake Fallback Triggers
+
+Direct Lake silently falls back to DirectQuery in several scenarios. Understanding these prevents unexpected performance degradation:
+
+| Trigger | Impact | Mitigation |
+|---------|--------|------------|
+| **SQL view (not materialised table)** | Connecting Power BI to a Presentation view triggers DirectQuery. Direct Lake requires materialised Delta-backed tables. | Write Presentation output as materialised tables, not views only. Use views for DirectQuery-specific use cases. |
+| **RLS on Warehouse tables** | In some Fabric versions, RLS applied at the Warehouse layer causes Direct Lake fallback for users subject to RLS policies. | Validate behaviour in the target Fabric capacity version before go-live. Consider whether RLS can be applied at the semantic model layer instead. |
+| **Unsupported DAX functions** | Certain DAX functions (e.g. some time intelligence with non-standard calendars) force DirectQuery. | Test the semantic model thoroughly after build. Avoid exotic DAX patterns on Direct Lake tables. |
+| **Framing threshold exceeded** | If a Delta table has too many uncommitted row groups, Direct Lake re-frames automatically. | Handled by Fabric, but may cause brief performance dips after large data refreshes. |
+
+**Connectivity approach for Warehouse-first architectures:**
+
+| Approach | Description | When to Use |
+|----------|-------------|-------------|
+| **Option A — SQL Endpoint (recommended)** | Connect Power BI directly to the Fabric Warehouse via the SQL analytics endpoint. Direct Lake mode is used automatically for Warehouse-backed Delta tables. No Lakehouse required. | Default path when using a Warehouse-first architecture. |
+| **Option B — Lakehouse Shortcut (fallback)** | Create a Lakehouse in the same workspace with OneLake shortcuts pointing to Presentation Warehouse tables. Power BI connects to the Lakehouse shortcuts. | Use only if Direct Lake via SQL endpoint proves unreliable. Adds a Lakehouse but requires no pipeline changes. |
+
+**Capacity licensing constraint:** On capacities below F64, every report consumer must hold a Power BI Pro or PPU licence for Direct Lake. This is a licensing constraint, not a technical one — Direct Lake itself works on F8+.
 
 ---
 

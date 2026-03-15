@@ -151,6 +151,46 @@ FROM {{ ref('customers_snapshot') }} snap
 - Location classifications that change over time
 - Any dimension where "what was the value at that point in time?" matters
 
+## Null-Safe Hash Pattern for Schema Evolution
+
+When using hash-based SCD2 change detection, adding a new column to the hash input can invalidate all existing hashes — causing a mass false-positive expire-and-reinsert across the entire table. The null-safe key-value concatenation pattern avoids this by only including non-NULL columns in the hash input:
+
+```sql
+CONVERT(
+    VARCHAR(64),
+    HASHBYTES(
+        'SHA2_256',
+        CONCAT(
+            CASE WHEN col1 IS NOT NULL THEN 'col1=' + CAST(col1 AS VARCHAR(MAX)) + '|' ELSE '' END,
+            CASE WHEN col2 IS NOT NULL THEN 'col2=' + CAST(col2 AS VARCHAR(MAX)) + '|' ELSE '' END,
+            CASE WHEN col3 IS NOT NULL THEN 'col3=' + CAST(col3 AS VARCHAR(MAX)) + '|' ELSE '' END
+            -- all mapped columns excluding primary key
+        )
+    ),
+    2
+) AS etl_hash
+```
+
+**Why this works:** When a new column is added to the mapping and existing records have NULL for that column, the `CASE WHEN ... IS NOT NULL` skips it entirely — so the hash input is identical to what it was before the column was added. Only records where the new column has a non-NULL value will produce a different hash.
+
+**Trade-offs:**
+- A genuine change from NULL to a non-NULL value will be detected (correct)
+- A change from a non-NULL value to NULL will also be detected (correct — the key-value pair disappears from the hash input)
+- Column order in the CONCAT matters — must be consistent between runs (derive from a canonical source like `column_mapping_json`)
+
+**Contrast with CONCAT_WS approach:**
+
+```sql
+-- Standard approach — breaks on schema evolution
+MD5(CONCAT_WS('|', col_a, col_b, col_c)) AS row_hash
+-- Adding col_d changes every hash even when col_d is NULL
+-- because CONCAT_WS still includes the separator position
+```
+
+Use the null-safe key-value pattern when the column list may evolve over time and you cannot afford to re-version the entire history table.
+
+---
+
 ## When NOT to Use SCD2
 
 - High-velocity data (telemetry, logs) — use append-only facts instead

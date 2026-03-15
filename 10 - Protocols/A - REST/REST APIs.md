@@ -293,12 +293,29 @@ GET /api/users?page=2&page_size=5
 |Offset-based|Use offset=N and limit=M|Useful for SQL queries|
 |Cursor-based|Uses a token (cursor) to fetch next/prev page|Good for large, real-time data sets (e.g. Twitter)|
 
+### OData Offset Pagination Gotchas
+
+When consuming OData APIs (common in Microsoft/SAP ecosystems) with `$top`/`$skip` pagination, several edge cases can silently corrupt data:
+
+**Offset drift on unsorted endpoints:** If the API does not guarantee a stable sort order, rows can shift between pages mid-extraction — causing duplicates or missed records. Always add `$orderby={table}.id` (or another unique, immutable column) to enforce deterministic pagination:
+
+```
+GET /table/service_schedule?$filter=...&$orderby=service_schedule.id&$top=10000&$skip=0
+```
+
+**Natural last-page detection:** Many OData endpoints do not return `@odata.count` or `@odata.nextLink`. The only reliable exit signal is when the response contains fewer rows than `$top` (or an empty set for exact multiples):
+
+```
+Exit pagination when: rows_returned < page_size OR rows_returned = 0
+```
+
 ### Pagination Best Practices
 
 - **Use Standard Parameters:** Employ universally recognized parameter names like page, page_size, offset, or limit for pagination controls
 - **Provide Metadata:** Include pagination metadata in responses, such as total, total_pages, current_page, next_page, and prev_page
 - **Limit Page Size:** Set a maximum limit for page_size to prevent clients from requesting too much data at once
 - **Handle Edge Cases:** Implement logic to handle scenarios like empty pages, last pages, and invalid parameters gracefully
+- **Enforce Stable Sort Order:** Always include `$orderby` on a unique column for offset-based pagination to prevent drift
 
 ---
 
@@ -554,6 +571,34 @@ If you're building a confidential client (like a backend app):
 |Tenant ID|Identifies the Azure AD instance|
 |Client Secret|Used to authenticate your app (keep safe)|
 |Redirect URI|Where Azure will send auth code/token|
+
+---
+
+## Session Management During Pagination
+
+Long-running paginated extractions can outlive the API's session token. This is common with APIs that use server-side session cookies (e.g. `ASP.NET_SessionId`) rather than stateless Bearer tokens.
+
+**Problem:** On page 50 of a 200-page extraction, the session cookie expires. The API may return inconsistent error codes — some return HTTP 401 (Unauthorized), others return HTTP 400 (Bad Request) or even 500 depending on how the server handles expired sessions.
+
+**Pattern:** Treat both 400 and 401 as transient recoverable errors during pagination. On either status code, re-authenticate to obtain a fresh session token and retry the failed page:
+
+```
+For each page:
+  1. Call API with current session token
+  2. If HTTP 200 → process rows, advance offset
+  3. If HTTP 400 or 401:
+     a. Re-authenticate (POST /login or refresh token)
+     b. Retry the same page with new session token
+     c. If retry fails → increment failure counter
+  4. If failure counter >= max_retries → hard fail, log error
+```
+
+**Key considerations:**
+- Set a configurable retry limit (e.g. 3 attempts) before escalating to a hard failure
+- Re-authenticate on the **same page offset** — do not advance the offset on a failed page
+- Log the original error code and the retry outcome for debugging
+- If the API uses Basic Auth, re-sending credentials obtains a fresh session automatically
+- For OAuth/Bearer APIs, use the refresh token flow rather than re-prompting for credentials
 
 ---
 
