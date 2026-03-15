@@ -608,3 +608,4 @@ Keep one DAG per file. Use `common/` for shared utilities. Pin provider package 
 - [[Docker & Container Patterns]] -- containerised task execution
 - [[Snowflake SQL Pipeline Patterns]] -- Snowflake queries from Airflow operators
 - [[dbt Testing & Data Quality]] -- testing patterns that integrate with orchestration
+- [[Apache Airflow Deep Dive]] -- architecture internals, operators, XComs, production patterns

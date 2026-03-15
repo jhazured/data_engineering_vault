@@ -447,3 +447,7 @@ df.with_columns(pl.col("name").str.to_uppercase())
 ```
 
 The general rule: if you reach for `apply` or `map_elements` in Polars, look for a built-in expression first. Polars expressions run in Rust; Python lambdas force row-by-row Python execution.
+
+---
+
+**Related:** [[DuckDB for Data Engineering]] | [[PySpark Core Concepts]] | [[Python Core Patterns for Data Engineering]]

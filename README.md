@@ -2,7 +2,7 @@
 
 A personal knowledge base for data engineering — built in [Obsidian](https://obsidian.md), covering cloud platforms, data pipelines, programming, DevOps, data modelling, and interview prep.
 
-**104 notes | 66,000+ lines | 11 topic areas**
+**113 notes | 70,000+ lines | 11 topic areas**
 
 ---
 
@@ -10,14 +10,15 @@ A personal knowledge base for data engineering — built in [Obsidian](https://o
 
 ```
 01 - Active Projects        Vault audit & coverage report
-02 - Templates              ETL pipeline templates & patterns
+02 - Templates              ETL pipeline templates, common patterns, reference architectures
 03 - Cloud Platforms        AWS, Azure/Microsoft Fabric, GCP
 04 - Data Engineering       Ingestion, storage, transformation, testing, monitoring, security, cataloguing
 05 - Data Streaming         Kafka, event-driven architecture, stream processing theory
 06 - Data Engineering Platforms
     dbt (5)                 Fundamentals, incremental, macros, tags, advanced/cost optimisation
     Snowflake (4)           SnowPro study guide, Cortex AI, troubleshooting
-    Databricks (1)          Delta Lake, medallion architecture, Unity Catalog, quality scoring
+    Databricks (3)          Delta Lake, medallion, Unity Catalog, DLT, modern patterns (2025)
+    DuckDB (1)              Embedded OLAP, Python/dbt integration, CI/CD
     Informatica (1)         PowerCenter, IDMC, mapping design, ETL patterns
     Matillion (1)           Cloud-native ELT, Snowflake integration, orchestration
     Dataiku (1)             DSS, visual/code recipes, MLOps, governance
@@ -31,12 +32,12 @@ A personal knowledge base for data engineering — built in [Obsidian](https://o
     Docker (2)              Container patterns, Kubernetes for data workloads
     Jenkins (1)             Pipeline patterns, shared Groovy libraries
     Terraform (1)           Modules, GCP networking/compute/IAM/monitoring
-    Airflow (1)             DAGs, scheduling, Dagster/Prefect alternatives
+    Airflow (2)             DAGs, scheduling, deep dive, Dagster/Prefect alternatives
     CI/CD (3)               GitHub Actions, GitLab CI, Snowflake deployment
 09 - Data Modelling         Kimball, Data Vault 2.0, star schema, data flow & sequence diagrams
-10 - Protocols              REST, SOAP, SFTP
-11 - Learning Resources     Interview guides (Snowflake, SQL, PySpark, dbt), DP-600 study guide,
-                            best practices, cheat sheets
+10 - Protocols              REST, SOAP, SFTP, gRPC & GraphQL
+11 - Learning Resources     Interview guides (Snowflake, SQL, PySpark, dbt, AWS DEA, Databricks),
+                            DP-600 study guide, best practices, cheat sheets
 ```
 
 ## Usage
@@ -80,10 +81,8 @@ See [`01 - Active Projects/Vault Coverage Report.md`](01%20-%20Active%20Projects
 
 ### Remaining Gaps
 
-- Airflow / Dagster orchestration (limited to one overview note)
-- PySpark Security/Governance, MLOps (subfolders scaffolded, empty)
-- Common Patterns templates (`02/A`)
-- Data Mesh / Data Contracts (emerging patterns, not yet covered)
+- PySpark Security/Governance, MLOps, GraphFrames (subfolders scaffolded, empty)
+- Iceberg / Hudi (brief coverage in existing note, no dedicated deep dive)
 
 ---
 

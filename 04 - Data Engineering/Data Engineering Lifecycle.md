@@ -199,3 +199,7 @@ When choosing tools, evaluate along these axes:
 | **Scale** | Current needs and 2-year growth projection |
 
 **Principle:** Choose boring technology when possible. Only adopt new tools when they solve a problem your current stack cannot.
+
+---
+
+**Related:** [[Data Mesh & Domain-Driven Data]] | [[Data Contracts & Schema Enforcement]] | [[Common Data Engineering Patterns]] | [[Data Ingestion Patterns]] | [[Apache Airflow & Orchestration Patterns]]

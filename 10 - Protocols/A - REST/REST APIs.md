@@ -559,8 +559,7 @@ If you're building a confidential client (like a backend app):
 
 ## Related Topics
 
-- [[SOAP]] - Compare with SOAP web services
-- [[HTTP Status Codes]] - Detailed HTTP response codes
-- [[API Authentication]] - Various authentication methods
-- [[API Testing]] - Testing strategies for REST APIs
-- [[OpenAPI Specification]] - API documentation standards
+- [[SOAP (Simple Object Access Protocol)|SOAP]] - Compare with SOAP web services
+- [[gRPC & GraphQL]] - Modern API protocols (binary, schema-first)
+- [[Data Contracts & Schema Enforcement]] - Schema enforcement across API boundaries
+- [[Trust Stores & Certificate Management]] - SSL/TLS for HTTPS connections
