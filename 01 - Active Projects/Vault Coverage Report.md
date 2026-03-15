@@ -184,83 +184,44 @@ data_engineering_vault/
 
 ## Section Ratings
 
-### Templates & Patterns
-
 | Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **02 - Templates** | 7/10 | 12 reusable patterns with code, AWS/Snowflake/dbt reference architecture, ETL templates | Could add Azure/GCP reference architectures |
-
-### Cloud Platforms
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **03/A - AWS** | 7/10 | Comprehensive service overview, exam-aligned | No hands-on project pattern (cf. Azure ADF note) |
-| **03/B - Azure** | 9/10 | Fabric T0-T5 architecture, ADF project patterns, hash merge SCD2, pagination | Most complete cloud section |
-| **03/C - GCP** | 7/10 | Service overview, Ansible/Terraform integration | No GCP-specific project pattern |
-
-### Data Engineering Core
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **04/A - Ingestion** | 8/10 | 3 notes covering batch, incremental, document ingestion | Solid; CDC could be expanded beyond Common Patterns |
-| **04/B - Query & Analysis** | 7/10 | RAG patterns, vector embeddings | Niche (Snowflake Cortex-specific) |
-| **04/C - Storage** | 9/10 | Distributed systems, Hadoop/MapReduce, multi-tier, open table formats | Iceberg/Hudi coverage is brief |
-| **04/D - Transformation** | 9/10 | Data contracts (Protobuf/Avro/JSON Schema), data mesh (4 principles), SCD2 | Excellent architectural coverage |
-| **04/E - Testing** | 8/10 | Quality frameworks + dbt testing | Could add Great Expectations hands-on |
-| **04/F - Monitoring** | 7/10 | Pipeline observability, Snowflake cost | Generic; could add Datadog/Grafana patterns |
-| **04/G - Security** | 7/10 | Snowflake RBAC, trust stores/TLS | No platform-agnostic IAM patterns |
-| **04/H - Cataloguing** | 8/10 | DataHub, Unity Catalog, OpenMetadata, decision matrix | Well-rounded |
-
-### Data Streaming
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **05 - Streaming** | 7/10 | Kafka fundamentals, event-driven, stream theory | No Kinesis/Pub-Sub dedicated notes |
-
-### Data Engineering Platforms
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **06/A - dbt** | 9/10 | 5 notes: fundamentals through advanced/cost optimisation | Deep; well cross-linked |
-| **06/B - Snowflake** | 9/10 | SnowPro guide, Cortex AI, troubleshooting, native dbt | Interview + platform + operational |
-| **06/C - Databricks** | 9/10 | Platform + modern 2025 patterns (DLT, Unity Catalog) | Strong after recent expansion |
-| **06/D-F - Informatica/Matillion/Dataiku** | 6/10 | Comprehensive single-note references each | Adequate but not deep; vendor-specific |
-| **06/G - DuckDB** | 7/10 | Architecture, Python/dbt integration, CI/CD, limitations | Single note; could expand with recipes |
-
-### Programming Languages
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **07/A - Bash** | 5/10 | Deployment patterns, Makefile | Thin; no scripting fundamentals deep dive |
-| **07/B - PySpark** | 10/10 | 26 files: architecture through production, MOC, testing (6), troubleshooting | Vault's strongest section by far |
-| **07/C - Python** | 7/10 | Core patterns, pandas/Polars, pytest, Streamlit | No advanced Python (decorators, generators, asyncio) |
-| **07/D - SQL** | 8/10 | 8 files: CTEs, window functions, optimisation, Snowflake pipelines | Could add QUALIFY, LATERAL, JSON functions |
-
-### DevOps & Orchestration
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **08 - DevOps** | 8/10 | Docker, K8s, Terraform, Ansible, Jenkins, CI/CD (3), Airflow (2), MCP | Broad and practical |
-
-### Data Modelling
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **09 - Data Modelling** | 7/10 | Kimball, Data Vault 2.0, star schema, DFD, sequence diagrams | No normalisation theory or graph modelling |
-
-### Protocols
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **10 - Protocols** | 7/10 | REST (comprehensive), SOAP (comprehensive), gRPC & GraphQL | SFTP is a stub |
-
-### Learning Resources
-
-| Section | Rating | Strengths | Gaps / Notes |
-|---------|:------:|-----------|-------------|
-| **11 - Learning Resources** | 9/10 | 7 interview/cert guides, best practices, cheat sheets | Exceptional for interview prep |
-
-### Overall
+|---------|:------:|-----------|--------------|
+| | | **Templates & Patterns** | |
+| 02 - Templates | 7/10 | 12 reusable patterns with code, AWS/Snowflake/dbt reference architecture, ETL templates | Could add Azure/GCP reference architectures |
+| | | **Cloud Platforms** | |
+| 03/A - AWS | 7/10 | Comprehensive service overview, exam-aligned | No hands-on project pattern (cf. Azure ADF note) |
+| 03/B - Azure | 9/10 | Fabric T0-T5 architecture, ADF project patterns, hash merge SCD2, pagination | Most complete cloud section |
+| 03/C - GCP | 7/10 | Service overview, Ansible/Terraform integration | No GCP-specific project pattern |
+| | | **Data Engineering Core** | |
+| 04/A - Ingestion | 8/10 | 3 notes covering batch, incremental, document ingestion | Solid; CDC could be expanded beyond Common Patterns |
+| 04/B - Query & Analysis | 7/10 | RAG patterns, vector embeddings | Niche (Snowflake Cortex-specific) |
+| 04/C - Storage | 9/10 | Distributed systems, Hadoop/MapReduce, multi-tier, open table formats | Iceberg/Hudi coverage is brief |
+| 04/D - Transformation | 9/10 | Data contracts (Protobuf/Avro/JSON Schema), data mesh (4 principles), SCD2 | Excellent architectural coverage |
+| 04/E - Testing | 8/10 | Quality frameworks + dbt testing | Could add Great Expectations hands-on |
+| 04/F - Monitoring | 7/10 | Pipeline observability, Snowflake cost | Generic; could add Datadog/Grafana patterns |
+| 04/G - Security | 7/10 | Snowflake RBAC, trust stores/TLS | No platform-agnostic IAM patterns |
+| 04/H - Cataloguing | 8/10 | DataHub, Unity Catalog, OpenMetadata, decision matrix | Well-rounded |
+| | | **Data Streaming** | |
+| 05 - Streaming | 7/10 | Kafka fundamentals, event-driven, stream theory | No Kinesis/Pub-Sub dedicated notes |
+| | | **Data Engineering Platforms** | |
+| 06/A - dbt | 9/10 | 5 notes: fundamentals through advanced/cost optimisation | Deep; well cross-linked |
+| 06/B - Snowflake | 9/10 | SnowPro guide, Cortex AI, troubleshooting, native dbt | Interview + platform + operational |
+| 06/C - Databricks | 9/10 | Platform + modern 2025 patterns (DLT, Unity Catalog) | Strong after recent expansion |
+| 06/D-F - Informatica/Matillion/Dataiku | 6/10 | Comprehensive single-note references each | Adequate but not deep; vendor-specific |
+| 06/G - DuckDB | 7/10 | Architecture, Python/dbt integration, CI/CD, limitations | Single note; could expand with recipes |
+| | | **Programming Languages** | |
+| 07/A - Bash | 5/10 | Deployment patterns, Makefile | Thin; no scripting fundamentals deep dive |
+| 07/B - PySpark | 10/10 | 26 files: architecture through production, MOC, testing (6), troubleshooting | Vault's strongest section by far |
+| 07/C - Python | 7/10 | Core patterns, pandas/Polars, pytest, Streamlit | No advanced Python (decorators, generators, asyncio) |
+| 07/D - SQL | 8/10 | 8 files: CTEs, window functions, optimisation, Snowflake pipelines | Could add QUALIFY, LATERAL, JSON functions |
+| | | **DevOps & Orchestration** | |
+| 08 - DevOps | 8/10 | Docker, K8s, Terraform, Ansible, Jenkins, CI/CD (3), Airflow (2), MCP | Broad and practical |
+| | | **Data Modelling** | |
+| 09 - Data Modelling | 7/10 | Kimball, Data Vault 2.0, star schema, DFD, sequence diagrams | No normalisation theory or graph modelling |
+| | | **Protocols** | |
+| 10 - Protocols | 7/10 | REST (comprehensive), SOAP (comprehensive), gRPC & GraphQL | SFTP is a stub |
+| | | **Learning Resources** | |
+| 11 - Learning Resources | 9/10 | 7 interview/cert guides, best practices, cheat sheets | Exceptional for interview prep |
 
 **Vault Average: 7.8/10**
 
