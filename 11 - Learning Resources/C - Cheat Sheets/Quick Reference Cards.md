@@ -32,6 +32,38 @@ dbt run --vars '{"date": "2026-01-01"}'  # Pass variables
 dbt build --select state:modified+    # Slim CI: modified + downstream
 ```
 
+**Advanced Usage:**
+```bash
+# Docs
+dbt docs generate                     # Generate catalogue
+dbt docs serve --port 8080            # Serve docs locally
+
+# Debugging
+dbt debug                             # Verify profiles.yml + connectivity
+dbt compile --select model_name       # Inspect compiled SQL
+dbt --debug run --select model_name   # Verbose logging
+
+# Listing resources
+dbt ls --resource-type model          # List all models
+dbt ls --select tag:finance           # List by tag
+dbt ls --output json                  # JSON output for scripting
+
+# Snapshots
+dbt snapshot --select snap_orders     # Run specific snapshot
+dbt snapshot --full-refresh           # Rebuild snapshot from scratch
+
+# Testing
+dbt test --select model_name         # Tests for one model
+dbt test --select test_type:singular  # Only singular tests
+dbt test --select source:*           # All source freshness tests
+
+# Build (run + test combined)
+dbt build --fail-fast                 # Stop on first failure
+dbt build --select +model_name+ --exclude tag:slow
+```
+
+> [!tip] See [[dbt Project Structure]] and [[dbt Advanced Patterns]] for project-level guidance.
+
 ---
 
 ## 2. SQL Essentials
@@ -109,6 +141,52 @@ git log --oneline -20                 # Last 20 commits, compact
 git diff main...HEAD                  # Changes since divergence
 ```
 
+**Advanced Git:**
+```bash
+# Rebase interactively (squash, reorder, edit commits)
+git rebase -i HEAD~5                  # Last 5 commits
+git rebase -i main                    # All commits since main
+# In editor: pick, squash, reword, edit, drop
+
+# Cherry-pick
+git cherry-pick <hash>                # Apply single commit
+git cherry-pick <hash1> <hash2>       # Apply multiple commits
+git cherry-pick --no-commit <hash>    # Apply without committing
+git cherry-pick --abort               # Cancel in-progress cherry-pick
+
+# Stash
+git stash                             # Stash tracked changes
+git stash -u                          # Include untracked files
+git stash list                        # View all stashes
+git stash show -p stash@{0}           # View stash diff
+git stash pop                         # Apply + remove latest stash
+git stash apply stash@{2}             # Apply specific, keep in list
+git stash drop stash@{0}              # Remove specific stash
+git stash branch new-branch stash@{0} # Create branch from stash
+
+# Bisect (find which commit introduced a bug)
+git bisect start
+git bisect bad                        # Current commit is broken
+git bisect good <known-good-hash>     # This commit was fine
+# Git checks out midpoint — test, then:
+git bisect good                       # or git bisect bad
+# Repeat until culprit found
+git bisect reset                      # Return to original HEAD
+
+# Reflog (recover "lost" commits)
+git reflog                            # Show all HEAD movements
+git checkout <reflog-hash>            # Recover lost commit
+git reflog expire --expire=90.days    # Default retention: 90 days
+
+# Worktree (multiple working directories, one repo)
+git worktree add ../hotfix main       # Check out main in ../hotfix
+git worktree add ../feature feat-branch
+git worktree list                     # Show all worktrees
+git worktree remove ../hotfix         # Clean up
+```
+
+> [!tip] `git bisect` is invaluable for tracking down when a [[dbt Advanced Patterns|dbt test]] started failing.
+
 ---
 
 ## 4. Docker
@@ -139,12 +217,57 @@ COPY . /app
 CMD ["python", "main.py"]
 ```
 
+**Advanced Docker:**
+```bash
+# Build
+docker build -t myapp:1.0 .                         # Build from Dockerfile
+docker build -f Dockerfile.prod -t myapp:prod .      # Specific Dockerfile
+docker build --no-cache -t myapp:1.0 .               # Rebuild without cache
+docker build --target builder -t myapp:build .        # Build specific stage
+docker build --build-arg VERSION=3.11 -t myapp .      # Pass build argument
+
+# Run
+docker run -d --name app -p 8080:80 myapp:1.0        # Detached, port mapping
+docker run --rm -it myapp:1.0 /bin/bash               # Interactive, auto-remove
+docker run -v /host/data:/container/data myapp        # Bind mount
+docker run --env-file .env myapp                      # Load environment file
+docker run --network my-net --name app myapp          # Attach to network
+docker run --cpus=2 --memory=4g myapp                 # Resource limits
+
+# Exec
+docker exec -it myapp /bin/bash                       # Shell into running container
+docker exec myapp cat /app/config.yml                 # Run command in container
+
+# Compose
+docker compose up -d                                  # Start all services
+docker compose up -d --build                          # Rebuild before starting
+docker compose down -v                                # Stop + remove volumes
+docker compose ps                                     # Status of services
+docker compose logs -f --tail=100 service_name        # Follow logs, last 100
+docker compose exec service_name /bin/bash            # Shell into service
+docker compose pull                                   # Pull latest images
+docker compose config                                 # Validate compose file
+
+# Housekeeping
+docker ps -a                                          # All containers
+docker images                                         # List images
+docker logs -f --since=1h myapp                       # Logs from last hour
+docker system prune -a --volumes                      # Full cleanup
+docker volume ls                                      # List volumes
+docker network ls                                     # List networks
+docker inspect myapp                                  # Container details (JSON)
+docker stats                                          # Live resource usage
+docker cp myapp:/app/output.csv ./output.csv          # Copy file out
+```
+
+> [!tip] See [[Docker Fundamentals]] and [[Docker Compose and Networking]] for deeper coverage.
+
 ---
 
 ## 5. Terraform
 
 ```bash
-terraform init                        # Initialize providers/backend
+terraform init                        # Initialise providers/backend
 terraform fmt && terraform validate   # Format + check syntax
 terraform plan                        # Preview changes
 terraform apply                       # Apply changes
@@ -160,6 +283,57 @@ terraform import <resource> <id>      # Import existing
 terraform workspace new dev           # Create workspace
 terraform workspace select prod       # Switch workspace
 ```
+
+**Advanced Terraform:**
+```bash
+# Init
+terraform init                                 # Download providers + modules
+terraform init -upgrade                        # Upgrade providers to latest
+terraform init -backend-config=prod.hcl        # Override backend config
+terraform init -migrate-state                  # Migrate state backend
+
+# Plan
+terraform plan                                 # Preview all changes
+terraform plan -target=aws_s3_bucket.data      # Plan single resource
+terraform plan -var="env=prod"                 # Override variable
+terraform plan -var-file=prod.tfvars           # Variables from file
+terraform plan -out=plan.tfplan                # Save plan to file
+terraform plan -destroy                        # Preview destroy
+
+# Apply
+terraform apply                                # Apply with confirmation
+terraform apply plan.tfplan                    # Apply saved plan (no prompt)
+terraform apply -auto-approve                  # Skip confirmation
+terraform apply -target=aws_s3_bucket.data     # Apply single resource
+terraform apply -replace=aws_instance.web      # Force recreate resource
+
+# Destroy
+terraform destroy                              # Destroy all resources
+terraform destroy -target=aws_instance.web     # Destroy single resource
+
+# State management
+terraform state list                           # All managed resources
+terraform state show aws_s3_bucket.data        # Resource details
+terraform state rm aws_s3_bucket.old           # Remove from state (keep infra)
+terraform state mv aws_s3_bucket.a aws_s3_bucket.b  # Rename in state
+terraform state pull                           # Download remote state
+terraform state push                           # Upload local state
+
+# Import
+terraform import aws_s3_bucket.data my-bucket  # Import existing resource
+terraform import 'aws_iam_role.role["admin"]' arn:aws:iam::123:role/admin
+
+# Other
+terraform fmt -recursive                       # Format all .tf files
+terraform validate                             # Syntax and reference check
+terraform output                               # Show all outputs
+terraform output -json                         # Outputs as JSON
+terraform graph | dot -Tpng > graph.png        # Dependency graph
+terraform providers                            # List required providers
+terraform force-unlock <lock-id>               # Release stuck state lock
+```
+
+> [!tip] See [[Terraform AWS Modules]] for module patterns and remote state configuration.
 
 ---
 
@@ -195,6 +369,74 @@ GRANT ROLE transformer TO USER dbt_service;
 | `DESCRIBE TABLE db.schema.table` | Column details |
 | `SHOW WAREHOUSES` | Status and sizes |
 | `SHOW GRANTS TO ROLE x` | Role permissions |
+
+**Advanced Snowflake SQL:**
+```sql
+-- COPY INTO variants
+COPY INTO raw.events FROM @my_s3_stage/events/
+  FILE_FORMAT = (TYPE = 'JSON')
+  MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
+  ON_ERROR = 'SKIP_FILE';
+
+COPY INTO raw.orders FROM @my_s3_stage/orders/
+  FILE_FORMAT = csv_fmt
+  PATTERN = '.*2026-03.*\\.csv'                -- Regex file filter
+  FORCE = TRUE;                                 -- Reload already-loaded files
+
+-- Unload (export) data
+COPY INTO @my_s3_stage/export/orders_
+  FROM (SELECT * FROM analytics.orders WHERE order_date >= '2026-01-01')
+  FILE_FORMAT = (TYPE = 'PARQUET')
+  HEADER = TRUE
+  OVERWRITE = TRUE;
+
+-- MERGE (upsert)
+MERGE INTO target t USING staging s ON t.id = s.id
+WHEN MATCHED AND s.updated_at > t.updated_at
+    THEN UPDATE SET t.name = s.name, t.updated_at = s.updated_at
+WHEN NOT MATCHED
+    THEN INSERT (id, name, updated_at) VALUES (s.id, s.name, s.updated_at);
+
+-- Stage operations
+CREATE OR REPLACE STAGE my_internal_stage;
+PUT file:///data/file.csv @my_internal_stage AUTO_COMPRESS = TRUE;
+LIST @my_s3_stage/orders/;
+REMOVE @my_internal_stage/file.csv.gz;
+
+-- SHOW commands
+SHOW DATABASES;
+SHOW SCHEMAS IN DATABASE analytics;
+SHOW TABLES IN SCHEMA analytics.public;
+SHOW COLUMNS IN TABLE analytics.public.orders;
+SHOW STAGES IN SCHEMA raw.public;
+SHOW FILE FORMATS IN SCHEMA raw.public;
+SHOW WAREHOUSES;
+SHOW ROLES;
+SHOW GRANTS TO ROLE transformer;
+SHOW GRANTS ON TABLE analytics.public.orders;
+
+-- DESCRIBE commands
+DESCRIBE TABLE analytics.public.orders;
+DESCRIBE STAGE my_s3_stage;
+DESCRIBE FILE FORMAT csv_fmt;
+DESCRIBE WAREHOUSE loading_wh;
+
+-- ALTER WAREHOUSE
+ALTER WAREHOUSE loading_wh SET WAREHOUSE_SIZE = 'MEDIUM';
+ALTER WAREHOUSE loading_wh SET AUTO_SUSPEND = 120;
+ALTER WAREHOUSE loading_wh SET MAX_CLUSTER_COUNT = 3;   -- Multi-cluster
+ALTER WAREHOUSE loading_wh SUSPEND;
+ALTER WAREHOUSE loading_wh RESUME;
+
+-- Useful metadata queries
+SELECT * FROM INFORMATION_SCHEMA.LOAD_HISTORY
+  WHERE TABLE_NAME = 'ORDERS' ORDER BY LAST_LOAD_TIME DESC LIMIT 10;
+
+SELECT * FROM TABLE(INFORMATION_SCHEMA.QUERY_HISTORY())
+  WHERE EXECUTION_STATUS = 'FAIL' ORDER BY START_TIME DESC LIMIT 20;
+```
+
+> [!tip] See [[Snowflake Architecture]], [[Snowflake Data Loading]], and [[Snowflake Pipeline Patterns]] for deeper patterns.
 
 ---
 
@@ -238,3 +480,134 @@ value  = data.get("key", "default")              # Safe access
 status = "active" if count > 0 else "empty"       # Ternary
 first, *middle, last = sorted(scores)              # Unpack
 ```
+
+---
+
+## 8. Python Packaging
+
+### pip and venv
+
+```bash
+# Virtual environments
+python -m venv .venv                              # Create virtual environment
+source .venv/bin/activate                         # Activate (Linux/macOS)
+.venv\Scripts\activate                            # Activate (Windows)
+deactivate                                        # Deactivate
+
+# pip basics
+pip install requests                              # Install package
+pip install "requests>=2.28,<3.0"                 # Version constraints
+pip install -r requirements.txt                   # Install from file
+pip install -e .                                  # Editable install (local package)
+pip install --upgrade pip                         # Upgrade pip itself
+
+# Dependency management
+pip freeze > requirements.txt                     # Export installed packages
+pip list --outdated                                # Show upgradable packages
+pip show requests                                 # Package metadata
+pip uninstall requests                            # Remove package
+pip cache purge                                   # Clear download cache
+```
+
+### Poetry
+
+```bash
+# Project setup
+poetry new my-project                             # Scaffold new project
+poetry init                                       # Initialise in existing directory
+
+# Dependencies
+poetry add requests                               # Add dependency
+poetry add "requests>=2.28"                       # With version constraint
+poetry add --group dev pytest black ruff          # Dev dependencies
+poetry remove requests                            # Remove dependency
+poetry update                                     # Update all to latest allowed
+
+# Environment
+poetry install                                    # Install all dependencies
+poetry install --no-dev                           # Production only
+poetry shell                                      # Activate virtual environment
+poetry env info                                   # Show environment details
+poetry env remove python3.11                      # Remove environment
+
+# Build and publish
+poetry build                                      # Create sdist + wheel
+poetry publish                                    # Publish to PyPI
+
+# Lock file
+poetry lock                                       # Regenerate lock file
+poetry lock --no-update                           # Lock without upgrading
+poetry export -f requirements.txt -o requirements.txt  # Export for pip
+```
+
+### uv (Fast Python Package Manager)
+
+```bash
+# Virtual environments
+uv venv                                           # Create .venv
+uv venv --python 3.12                             # Specific Python version
+
+# Installing packages (pip-compatible)
+uv pip install requests                           # Install package
+uv pip install -r requirements.txt                # From requirements file
+uv pip install -e .                               # Editable install
+uv pip compile requirements.in -o requirements.txt  # Lock dependencies
+uv pip sync requirements.txt                      # Sync environment exactly
+
+# Project management (uv native)
+uv init my-project                                # Scaffold project
+uv add requests                                   # Add dependency
+uv add --dev pytest ruff                          # Dev dependency
+uv remove requests                                # Remove dependency
+uv lock                                           # Generate lock file
+uv sync                                           # Install from lock file
+uv run python main.py                             # Run within environment
+uv run pytest                                     # Run tool within environment
+
+# Tool management
+uv tool install ruff                              # Install CLI tool globally
+uv tool run black .                               # Run tool without installing
+```
+
+### pyproject.toml Reference
+
+```toml
+[project]
+name = "my-pipeline"
+version = "1.0.0"
+description = "Data ingestion pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.28",
+    "pandas>=2.0",
+    "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.1", "black>=23.0"]
+
+[project.scripts]
+ingest = "my_pipeline.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+```
+
+| Tool | Speed | Lock File | Resolver | Best For |
+|---|---|---|---|---|
+| **pip + venv** | Moderate | Manual (`freeze`) | Basic | Simple projects, CI |
+| **Poetry** | Moderate | `poetry.lock` | Advanced | Libraries, published packages |
+| **uv** | Very fast | `uv.lock` | Advanced | All use cases (Rust-based, drop-in replacement) |
+
+> [!tip] `uv` is rapidly becoming the standard for Python packaging in data engineering due to its speed and compatibility with both pip and Poetry workflows. See [[Python Development Environment]] for setup guidance.
+
+---
