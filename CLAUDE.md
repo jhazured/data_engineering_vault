@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-This is an Obsidian knowledge vault — a personal reference library for data engineering topics. It is **not** a software project. There is no build system, test suite, or application code. The content is ~96 markdown files organized into numbered topic folders.
+This is an Obsidian knowledge vault — a personal reference library for data engineering topics. It is **not** a software project. There is no build system, test suite, or application code. The content is ~100 markdown files organized into numbered topic folders.
 
 ## Vault Structure
 
@@ -13,14 +13,14 @@ Notes are organized by numbered prefix into domain areas:
 - **01 - Active Projects** — workspace for current initiatives (vault audit, coverage report)
 - **02 - Templates** — ETL pipeline templates & patterns
 - **03 - Cloud Platforms** — AWS, Azure/Microsoft Fabric, GCP
-- **04 - Data Engineering** — core DE topics: ingestion (3 notes), storage, transformation, testing & quality (2 notes), monitoring & observability (2 notes), security, cataloguing (empty)
+- **04 - Data Engineering** — core DE topics: ingestion (3 notes), storage, transformation, testing & quality (2 notes), monitoring & observability (2 notes), security, cataloguing
 - **05 - Data Streaming** — pub/sub, Kafka, event-driven architecture
 - **06 - Data Engineering Platforms** — dbt (5 notes), Snowflake (4 notes), Databricks (1 comprehensive note), Informatica, Matillion, Dataiku
-- **07 - Programming Languages** — Bash (1, expanded), PySpark (25 files incl. Delta Lake patterns + cloud integration), Python (5 notes incl. core patterns), SQL (8 notes incl. Snowflake pipeline patterns)
+- **07 - Programming Languages** — Bash (1, expanded), PySpark (25 files incl. Delta Lake patterns + cloud integration), Python (6 notes incl. core patterns, pandas/Polars, Streamlit), SQL (8 notes incl. Snowflake pipeline patterns)
 - **08 - DevOps & Orchestration** — Ansible, Docker (2 notes), Kubernetes, Jenkins, Terraform (expanded), API management/MCP, CI/CD (3 notes)
-- **09 - Data Modelling** — Kimball, star schema implementation, data flow diagrams, sequence diagrams
+- **09 - Data Modelling** — Kimball, Data Vault 2.0, star schema implementation, data flow diagrams, sequence diagrams
 - **10 - Protocols** — REST, SOAP, SFTP
-- **11 - Learning Resources** — interview guides (4), DP-600 study guide, best practices (empty), cheat sheets (empty)
+- **11 - Learning Resources** — interview guides (4), DP-600 study guide, best practices, cheat sheets
 
 ## Obsidian Plugins
 
@@ -41,15 +41,11 @@ See `01 - Active Projects/Vault Coverage Report.md` for the full prioritised gap
 
 ### Remaining Gaps (as of 2026-03-15)
 
-- **Airflow / Dagster orchestration** — biggest functional gap, no folder yet
-- **Data Cataloguing** (DataHub, OpenMetadata) → `04/H - Data Cataloguing` (empty)
-- **Best Practices** → `11/B` (empty)
-- **Cheat Sheets** → `11/C` (empty)
-- **Data Vault 2.0** — alternative to Kimball, not yet covered
-- **pandas / Polars** → `07/C - Python` (no dataframe library reference)
-- **Iceberg / Hudi** — open table formats beyond Delta Lake
+- **Airflow / Dagster orchestration** — biggest functional gap, limited to one overview note
+- **Iceberg / Hudi** — open table formats beyond Delta Lake (brief coverage in existing note)
 - **PySpark Security/Governance, MLOps** — subfolders scaffolded but empty
-- **PySpark Security & Governance.md** at vault root — empty file, should be deleted or populated
+- **Common Patterns** → `02/A` (empty folder)
+- **Data Mesh / Data Contracts** — emerging architectural patterns, not yet covered
 
 ### Workspace Projects (source material)
 

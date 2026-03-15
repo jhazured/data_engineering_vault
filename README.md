@@ -2,7 +2,7 @@
 
 A personal knowledge base for data engineering — built in [Obsidian](https://obsidian.md), covering cloud platforms, data pipelines, programming, DevOps, data modelling, and interview prep.
 
-**99 notes | 64,000+ lines | 11 topic areas**
+**100 notes | 64,000+ lines | 11 topic areas**
 
 ---
 
@@ -24,7 +24,7 @@ A personal knowledge base for data engineering — built in [Obsidian](https://o
 07 - Programming Languages
     Bash (1)                Deployment patterns, scripting fundamentals
     PySpark (25)            Core → streaming → testing → production → cloud integration
-    Python (6)              Core patterns, pandas/Polars, pytest, data generation, Streamlit
+    Python (6)              Core patterns, pandas & Polars, pytest, data generation, Streamlit
     SQL (8)                 CTEs, window functions, optimisation, Snowflake pipeline patterns
 08 - DevOps & Orchestration
     Ansible (1)             Playbooks, roles, GCP integration
@@ -33,7 +33,7 @@ A personal knowledge base for data engineering — built in [Obsidian](https://o
     Terraform (1)           Modules, GCP networking/compute/IAM/monitoring
     Airflow (1)             DAGs, scheduling, Dagster/Prefect alternatives
     CI/CD (3)               GitHub Actions, GitLab CI, Snowflake deployment
-09 - Data Modelling         Kimball, Data Vault 2.0, star schema implementation
+09 - Data Modelling         Kimball, Data Vault 2.0, star schema, data flow & sequence diagrams
 10 - Protocols              REST, SOAP, SFTP
 11 - Learning Resources     Interview guides (Snowflake, SQL, PySpark, dbt), DP-600 study guide,
                             best practices, cheat sheets
@@ -80,9 +80,10 @@ See [`01 - Active Projects/Vault Coverage Report.md`](01%20-%20Active%20Projects
 
 ### Remaining Gaps
 
+- Airflow / Dagster orchestration (limited to one overview note)
 - PySpark Security/Governance, MLOps (subfolders scaffolded, empty)
 - Common Patterns templates (`02/A`)
-- Postman API testing (`08/E/A`)
+- Data Mesh / Data Contracts (emerging patterns, not yet covered)
 
 ---
 

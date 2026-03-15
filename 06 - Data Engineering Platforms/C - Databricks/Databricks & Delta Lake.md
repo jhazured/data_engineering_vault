@@ -43,7 +43,7 @@ WHEN NOT MATCHED THEN INSERT *;
 
 ## Medallion Architecture
 
-The project implements a three-layer architecture orchestrated by `MedallionPipeline`, chaining `BronzeLayerProcessor` -> `SilverLayerProcessor` -> `GoldLayerProcessor`. See [[Delta Lake Patterns]].
+The project implements a three-layer architecture orchestrated by `MedallionPipeline`, chaining `BronzeLayerProcessor` -> `SilverLayerProcessor` -> `GoldLayerProcessor`. See [[Delta Lake Operations & Patterns]].
 
 | Layer | Purpose | Key Metadata Columns |
 |-------|---------|---------------------|
@@ -327,4 +327,4 @@ Log format: `{"timestamp": "...", "level": "INFO", "logger": "...", "message": "
 
 ---
 
-**Related:** [[Terraform for Data Infrastructure]] | [[Delta Lake Patterns]] | [[Data Validation & Quality Frameworks]] | [[Apache Spark Fundamentals]] | [[MLflow & Experiment Tracking]]
+**Related:** [[Terraform for Data Infrastructure]] | [[Delta Lake Operations & Patterns]] | [[Data Validation & Quality Frameworks]] | Apache Spark Fundamentals | MLflow & Experiment Tracking

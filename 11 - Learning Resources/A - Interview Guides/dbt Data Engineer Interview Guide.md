@@ -33,9 +33,9 @@
 **dbt's Core Value Propositions:**
 
 - Version control for analytics code
-- Built-in [[Testing Framework]]
-- Automatic [[Documentation Generation]]
-- [[Dependency Management]]
+- Built-in testing framework
+- Automatic documentation generation
+- Dependency management
 - Modular, reusable code
 
 **Modern Data Stack Benefits:**
@@ -43,7 +43,7 @@
 - Leverages warehouse compute power
 - Treats analytics code like software
 - Enables collaboration between data teams
-- Provides [[Data Lineage]] and documentation
+- Provides data lineage and documentation
 
 ### dbt Project Structure and Directory Purpose
 
@@ -176,7 +176,7 @@ FROM {{ ref('int_customer_metrics') }}
 
 ### dbt Dependencies and the ref() Function
 
-**[[Dependency Management]]**: dbt automatically builds a Directed Acyclic Graph ([[DAG]]) based on `ref()` and `source()` functions.
+**Dependency Management**: dbt automatically builds a Directed Acyclic Graph (DAG) based on `ref()` and `source()` functions.
 
 ```sql
 -- models/marts/customer_summary.sql
