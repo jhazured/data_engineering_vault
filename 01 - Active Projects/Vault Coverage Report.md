@@ -48,6 +48,175 @@
 
 ---
 
+## Project Tree
+
+```
+data_engineering_vault/
+├── 01 - Active Projects/
+│   └── Vault Coverage Report.md
+├── 02 - Templates/
+│   ├── A - Common Patterns/
+│   │   └── Common Data Engineering Patterns.md
+│   ├── B - ETL vs ELT Workflows/
+│   │   └── ETL Pipeline Templates & Patterns.md
+│   └── C - Reference Architectures/
+│       └── AWS Snowflake dbt Reference Architecture.md
+├── 03 - Cloud Platforms/
+│   ├── A - AWS/
+│   │   └── AWS Data Services for Data Engineering.md
+│   ├── B - Azure/
+│   │   ├── Azure Data Factory Project Patterns.md
+│   │   └── Microsoft Fabric & Azure Data Services.md
+│   └── C - GCP/
+│       └── GCP Data Services for Data Engineering.md
+├── 04 - Data Engineering/
+│   ├── Data Engineering Lifecycle.md
+│   ├── A - Ingestion/
+│   │   ├── Data Ingestion Patterns.md
+│   │   ├── Document Ingestion & Chunking.md
+│   │   └── Incremental Loading Strategies.md
+│   ├── B - Query & Analysis/
+│   │   ├── RAG Patterns.md
+│   │   └── Vector Embeddings & Semantic Search.md
+│   ├── C - Storage and Warehousing/
+│   │   ├── Distributed Systems Fundamentals.md
+│   │   ├── Hadoop & MapReduce Fundamentals.md
+│   │   ├── Multi-Tier Data Architecture.md
+│   │   └── Open Table Formats - Iceberg Hudi & Delta.md
+│   ├── D - Transformation/
+│   │   ├── Data Contracts & Schema Enforcement.md
+│   │   ├── Data Mesh & Domain-Driven Data.md
+│   │   └── SCD Type 2 Patterns.md
+│   ├── E - Testing & Quality Assurance/
+│   │   ├── Data Validation & Quality Frameworks.md
+│   │   └── dbt Testing & Data Quality.md
+│   ├── F - Monitoring & Observability/
+│   │   ├── Pipeline Observability & Monitoring.md
+│   │   └── Snowflake Cost Monitoring.md
+│   ├── G - Security & Governance/
+│   │   ├── Snowflake RBAC & Data Security.md
+│   │   └── Trust Stores & Certificate Management.md
+│   └── H - Data Cataloguing/
+│       └── Data Cataloguing & Discovery.md
+├── 05 - Data Streaming/
+│   ├── A - Publish-Subscribe/
+│   │   └── Stream Processing Theory.md
+│   ├── B - Apache Kafka/
+│   │   └── Apache Kafka Fundamentals.md
+│   └── C - Event-Driven Architecture/
+│       └── Event-Driven Architecture.md
+├── 06 - Data Engineering Platforms/
+│   ├── A - dbt/
+│   │   ├── Core dbt Fundamentals.md
+│   │   ├── dbt Advanced Patterns & Cost Optimisation.md
+│   │   ├── dbt Incremental Loading Patterns.md
+│   │   ├── dbt Macro Patterns.md
+│   │   └── dbt Tag & Execution Strategy.md
+│   ├── B - Snowflake/
+│   │   ├── SnowPro Advanced Data Engineer (DEA-C02) Complete Study Guide.md
+│   │   ├── Snowflake & dbt Troubleshooting.md
+│   │   ├── Snowflake Cortex AI.md
+│   │   └── Snowflake Native dbt Workspace.md
+│   ├── C - Databricks/
+│   │   ├── Databricks & Delta Lake.md
+│   │   └── Databricks Modern Patterns (2025).md
+│   ├── D - Informatica/
+│   │   └── Informatica for Data Engineering.md
+│   ├── E - Matillion/
+│   │   └── Matillion for Data Engineering.md
+│   ├── F - Dataiku/
+│   │   └── Dataiku for Data Engineering.md
+│   └── G - DuckDB/
+│       └── DuckDB for Data Engineering.md
+├── 07 - Programming Languages/
+│   ├── A - Bash/
+│   │   └── Bash Deployment Patterns.md
+│   ├── B - PySpark/
+│   │   ├── 01 - Core Concepts/ (2 files: Spark Architecture, PySpark Core)
+│   │   ├── 02 - Data Operations/ (1 file)
+│   │   ├── 03 - Window Functions/ (1 file)
+│   │   ├── 04 - Performance Optimization/ (1 file)
+│   │   ├── 05 - Advanced Features/ (2 files: Advanced Features, Delta Lake)
+│   │   ├── 06 - Streaming/ (1 file)
+│   │   ├── 07 - Testing & Quality/ (6 files)
+│   │   ├── 09 - Production Patterns/ (1 file)
+│   │   ├── 10 - Cloud Integration/ (1 file)
+│   │   └── 12 - Reference & Utilities/ (5 files: MOC, Quick Ref, Error Codes, Troubleshooting, Functions)
+│   ├── C - Python/
+│   │   ├── pandas & Polars for Data Engineering.md
+│   │   ├── Python Core Patterns for Data Engineering.md
+│   │   ├── Python Data Generation Patterns.md
+│   │   ├── Python Testing with pytest.md
+│   │   ├── Streamlit Data Apps.md
+│   │   └── Markdown to Notebook Conversion.md
+│   └── D - SQL/
+│       ├── A - Data Aggregation & Filtering/ (1 file)
+│       ├── B - CTEs/ (2 files)
+│       ├── C - Query Optimization/ (1 file)
+│       ├── D - Window Functions/ (1 file)
+│       ├── E - Performance Tuning/ (1 file)
+│       ├── F - Stored Procedures/ (1 file)
+│       └── Snowflake SQL Pipeline Patterns.md
+├── 08 - DevOps & Orchestration/
+│   ├── A - Ansible/ (1 file)
+│   ├── B - Docker/ (2 files: Container Patterns, Kubernetes)
+│   ├── C - Jenkins/ (1 file)
+│   ├── D - Terraform/ (1 file)
+│   ├── E - API Management/ (1 file: MCP)
+│   ├── F - CI-CD Patterns/ (3 files: GitHub Actions, GitLab CI, Snowflake Deploy)
+│   └── G - Orchestration/ (2 files: Airflow Overview, Airflow Deep Dive)
+├── 09 - Data Modelling/
+│   ├── A - Entity Relationship Diagrams/ (3 files: Kimball, Data Vault 2.0, Star Schema)
+│   ├── B - Data Flow Diagrams/ (1 file)
+│   └── C - Sequence Diagrams/ (1 file)
+├── 10 - Protocols/
+│   ├── A - REST/ (1 file)
+│   ├── B - SOAP/ (1 file)
+│   ├── C - SFTP/ (1 file: GoAnywhere MFT)
+│   └── D - gRPC & GraphQL/ (1 file)
+└── 11 - Learning Resources/
+    ├── A - Interview Guides/ (7 files: Snowflake, SQL, PySpark, dbt, AWS DEA, Databricks, DP-600)
+    ├── B - Best Practices/ (1 file)
+    └── C - Cheat Sheets/ (1 file)
+```
+
+---
+
+## Section Ratings
+
+| Section | Rating | Strengths | Gaps / Notes |
+|---------|:------:|-----------|-------------|
+| **02 - Templates** | 7/10 | 12 reusable patterns with code, AWS/Snowflake/dbt reference architecture, ETL templates | Could add Azure/GCP reference architectures |
+| **03/A - AWS** | 7/10 | Comprehensive service overview, exam-aligned | No hands-on project pattern (cf. Azure ADF note) |
+| **03/B - Azure** | 9/10 | Fabric T0-T5 architecture, ADF project patterns, hash merge SCD2, pagination | Most complete cloud section |
+| **03/C - GCP** | 7/10 | Service overview, Ansible/Terraform integration | No GCP-specific project pattern |
+| **04/A - Ingestion** | 8/10 | 3 notes covering batch, incremental, document ingestion | Solid; CDC could be expanded beyond Common Patterns |
+| **04/B - Query & Analysis** | 7/10 | RAG patterns, vector embeddings | Niche (Snowflake Cortex-specific) |
+| **04/C - Storage** | 9/10 | Distributed systems, Hadoop/MapReduce, multi-tier, open table formats | Iceberg/Hudi coverage is brief |
+| **04/D - Transformation** | 9/10 | Data contracts (Protobuf/Avro/JSON Schema), data mesh (4 principles), SCD2 | Excellent architectural coverage |
+| **04/E - Testing** | 8/10 | Quality frameworks + dbt testing | Could add Great Expectations hands-on |
+| **04/F - Monitoring** | 7/10 | Pipeline observability, Snowflake cost | Generic; could add Datadog/Grafana patterns |
+| **04/G - Security** | 7/10 | Snowflake RBAC, trust stores/TLS | No platform-agnostic IAM patterns |
+| **04/H - Cataloguing** | 8/10 | DataHub, Unity Catalog, OpenMetadata, decision matrix | Well-rounded |
+| **05 - Streaming** | 7/10 | Kafka fundamentals, event-driven, stream theory | No Kinesis/Pub-Sub dedicated notes |
+| **06/A - dbt** | 9/10 | 5 notes: fundamentals through advanced/cost optimisation | Deep; well cross-linked |
+| **06/B - Snowflake** | 9/10 | SnowPro guide, Cortex AI, troubleshooting, native dbt | Interview + platform + operational |
+| **06/C - Databricks** | 9/10 | Platform + modern 2025 patterns (DLT, Unity Catalog) | Strong after recent expansion |
+| **06/D-F - Informatica/Matillion/Dataiku** | 6/10 | Comprehensive single-note references each | Adequate but not deep; vendor-specific |
+| **06/G - DuckDB** | 7/10 | Architecture, Python/dbt integration, CI/CD, limitations | Single note; could expand with recipes |
+| **07/A - Bash** | 5/10 | Deployment patterns, Makefile | Thin; no scripting fundamentals deep dive |
+| **07/B - PySpark** | 10/10 | 26 files: architecture through production, MOC, testing (6), troubleshooting | Vault's strongest section by far |
+| **07/C - Python** | 7/10 | Core patterns, pandas/Polars, pytest, Streamlit | No advanced Python (decorators, generators, asyncio) |
+| **07/D - SQL** | 8/10 | 8 files: CTEs, window functions, optimisation, Snowflake pipelines | Could add QUALIFY, LATERAL, JSON functions |
+| **08 - DevOps** | 8/10 | Docker, K8s, Terraform, Ansible, Jenkins, CI/CD (3), Airflow (2), MCP | Broad and practical |
+| **09 - Data Modelling** | 7/10 | Kimball, Data Vault 2.0, star schema, DFD, sequence diagrams | No normalisation theory or graph modelling |
+| **10 - Protocols** | 7/10 | REST (comprehensive), SOAP (comprehensive), gRPC & GraphQL | SFTP is a stub |
+| **11 - Learning Resources** | 9/10 | 7 interview/cert guides, best practices, cheat sheets | Exceptional for interview prep |
+
+**Vault Average: 7.8/10**
+
+---
+
 ## Remaining Gaps
 
 ### PySpark Empty Subfolders
