@@ -400,4 +400,505 @@ spark.sql.adaptive.enabled                true
 
 ---
 
+## 9. ETL Framework Patterns
+
+The following sections document production patterns from a config-driven GCP ETL framework built on the factory method pattern. Each pipeline stage -- extraction, transformation, loading -- is selected at runtime from a registry of typed handlers.
+
+### Framework Architecture
+
+The framework uses a **factory pattern** to dispatch to the correct extractor, transformer, or loader based on a YAML configuration. A single `DataExtractor`, `DataTransformer`, or `DataLoader` class delegates to a specialised implementation:
+
+```python
+# Factory dispatch -- source type selects the handler
+extractors = {
+    'bigquery':   BigQueryExtractor,
+    'cloudsql':   CloudSQLExtractor,
+    'gcs':        GCSExtractor,
+    'local_file': LocalFileExtractor,
+    'api':        APIExtractor,
+}
+
+extractor = extractors[source_config['type']](source_config)
+df = extractor.extract()
+```
+
+All handlers inherit from an abstract base class that enforces `extract()` / `load()` contracts and provides config validation:
+
+```python
+class BaseExtractor(ABC):
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+
+    def _validate_config(self, required_fields: List[str]) -> None:
+        missing = [f for f in required_fields if f not in self.config]
+        if missing:
+            raise ValueError(f"Missing required fields: {missing}")
+
+    @abstractmethod
+    def extract(self) -> pd.DataFrame:
+        pass
+```
+
+### Configuration Management
+
+Pipeline configs are YAML files rendered through [[Jinja2]] templating, allowing environment-specific variable injection:
+
+```python
+from jinja2 import Environment, FileSystemLoader
+
+class ConfigManager:
+    def __init__(self, environment: str = 'dev'):
+        self.environment = environment
+
+    def load_config(self, config_path, variables=None):
+        env_vars = {
+            'ENVIRONMENT': self.environment,
+            'PROJECT_ID': os.getenv('PROJECT_ID'),
+            'REGION': os.getenv('REGION', 'us-central1'),
+            'BQ_LOCATION': os.getenv('BQ_LOCATION', 'US'),
+            'GCS_TEMP_BUCKET': os.getenv('GCS_TEMP_BUCKET'),
+        }
+        template_vars = {**env_vars, **(variables or {})}
+
+        # Render Jinja2 template then parse as YAML
+        env = Environment(loader=FileSystemLoader(config_path.parent))
+        template = env.get_template(config_path.name)
+        config = yaml.safe_load(template.render(**template_vars))
+        return config
+```
+
+Required config sections: `job_name`, `source` (with `type`), and `destination` (with `type`). An optional `transformations` list defines the pipeline's transformation chain.
+
+---
+
+## 10. Extraction Patterns
+
+### BigQuery Extraction with Query Job Config
+
+The `BigQueryExtractor` wraps `QueryJobConfig` to control cost and caching at extraction time. Queries can be inline strings or `.sql` file references:
+
+```python
+from google.cloud import bigquery
+from pathlib import Path
+
+client = bigquery.Client(project=project_id)
+
+# Load query from file or inline
+query = config['query']
+if query.endswith('.sql'):
+    with open(Path(query), 'r') as f:
+        query = f.read()
+
+# Configure extraction job
+job_config = bigquery.QueryJobConfig()
+job_config.dry_run = config.get('dry_run', False)
+job_config.use_query_cache = config.get('use_query_cache', True)
+job_config.maximum_bytes_billed = config.get('maximum_bytes_billed')  # e.g. 5 * 1024**3
+
+df = client.query(query, job_config=job_config).to_dataframe()
+```
+
+**Key parameters:**
+
+| Parameter | Purpose | Production Default |
+|---|---|---|
+| `dry_run` | Estimate bytes scanned without executing | `False` (set `True` in CI) |
+| `use_query_cache` | Reuse previous results for identical queries | `True` |
+| `maximum_bytes_billed` | Hard cap on scan cost; query fails if exceeded | Set per-job based on expected size |
+
+### Cloud SQL Extraction with Connector Switching
+
+The `CloudSQLExtractor` uses the Cloud SQL Python Connector and dynamically selects the driver based on database type -- `pymysql` for MySQL, `pg8000` for PostgreSQL:
+
+```python
+from google.cloud.sql.connector import Connector
+import sqlalchemy, pandas as pd
+
+connector = Connector()
+
+def getconn():
+    driver = "pymysql" if db_type == "mysql" else "pg8000"
+    return connector.connect(
+        "project:region:instance",
+        driver,
+        user=user,
+        password=password,
+        db=database,
+    )
+
+# SQLAlchemy engine URL must match the driver
+url = "mysql+pymysql://" if db_type == "mysql" else "postgresql+pg8000://"
+engine = sqlalchemy.create_engine(url, creator=getconn)
+
+try:
+    df = pd.read_sql(query, engine)
+finally:
+    connector.close()  # always close to release resources
+```
+
+The `connector.close()` call in `finally` is essential -- the connector maintains IAM-authenticated tunnels that leak if not cleaned up.
+
+### GCS Multi-File Extraction with Format Handling
+
+The `GCSExtractor` lists blobs by prefix, reads each file according to its format, and concatenates the results:
+
+```python
+from google.cloud import storage
+import pandas as pd
+
+client = storage.Client(project=project_id)
+bucket = client.bucket(bucket_name)
+blobs = list(bucket.list_blobs(prefix=file_pattern))
+
+dataframes = []
+for blob in blobs:
+    if file_format == 'csv':
+        content = blob.download_as_text()
+        df = pd.read_csv(
+            pd.io.common.StringIO(content),
+            **csv_options  # e.g. delimiter, encoding, dtype
+        )
+    elif file_format == 'json':
+        content = blob.download_as_text()
+        df = pd.read_json(
+            pd.io.common.StringIO(content),
+            **json_options  # e.g. orient, lines
+        )
+    elif file_format == 'parquet':
+        content_bytes = blob.download_as_bytes()
+        df = pd.read_parquet(
+            pd.io.common.BytesIO(content_bytes),
+            **parquet_options  # e.g. columns, filters
+        )
+    dataframes.append(df)
+
+result = pd.concat(dataframes, ignore_index=True)
+```
+
+Note that Parquet requires `download_as_bytes()` (binary), whilst CSV and JSON use `download_as_text()` (string). Each format accepts pass-through options for fine-grained control (delimiters, encodings, column selection).
+
+### API Extraction with Nested JSON Support
+
+The `APIExtractor` handles REST endpoints and uses `pd.json_normalize` for flattening nested JSON responses. A `data_path` parameter navigates into the response structure:
+
+```python
+import requests
+import pandas as pd
+
+response = requests.get(url, headers=headers, params=params)
+response.raise_for_status()
+
+json_data = response.json()
+
+# Navigate nested response: e.g. data_path = "results.items"
+if data_path:
+    for key in data_path.split('.'):
+        json_data = json_data[key]
+
+# Flatten nested objects into columns
+df = pd.json_normalize(json_data)
+```
+
+`json_normalize` recursively flattens nested dictionaries into dot-separated column names (e.g. `address.city`, `address.postcode`), which is preferable to manual parsing for complex API responses.
+
+---
+
+## 11. Transformation Patterns
+
+The `DataTransformer` applies a sequential chain of named transformations from configuration. Each transformation is a dictionary with a `type` key that maps to a handler function.
+
+### Transformation Registry
+
+Available transformations and their config keys:
+
+| Transformation | Purpose | Key Config Fields |
+|---|---|---|
+| `filter` | Row-level filtering | `conditions` (column, operator, value) |
+| `select_columns` | Column projection | `columns` |
+| `rename_columns` | Column renaming | `mapping` |
+| `add_column` | Derived columns | `columns` (name, type, value) |
+| `drop_columns` | Remove columns | `columns` |
+| `convert_types` | Type casting | `conversions` (column: target_type) |
+| `fill_nulls` | Null imputation | `fill_values` or `method` |
+| `drop_nulls` | Remove null rows | `columns`, `how` |
+| `drop_duplicates` | Deduplication | `columns`, `keep` |
+| `aggregate` | Group-by aggregation | `group_by`, `aggregations` |
+| `pivot` | Rows to columns | `index`, `columns`, `values`, `aggfunc` |
+| `unpivot` | Columns to rows | `id_vars`, `value_vars` |
+| `window_functions` | Windowed calculations | `windows` (column, function, partition_by) |
+| `standardize_text` | Text normalisation | `columns`, `operations` |
+| `extract_date_parts` | Date decomposition | `date_columns`, `parts` |
+| `validate_data_quality` | Quality checks | `rules` |
+
+### Type Conversions
+
+The framework uses pandas nullable types and coercion to handle dirty data gracefully:
+
+```python
+conversions = {
+    'revenue':     'float',     # pd.to_numeric with errors='coerce'
+    'quantity':    'int',       # nullable Int64 to preserve NaN
+    'event_date':  'datetime',  # pd.to_datetime with errors='coerce'
+    'customer_id': 'string',   # .astype(str)
+    'is_active':   'boolean',  # .astype(bool)
+}
+
+for column, target_type in conversions.items():
+    if target_type == 'int':
+        df[column] = pd.to_numeric(df[column], errors='coerce').astype('Int64')
+    elif target_type == 'float':
+        df[column] = pd.to_numeric(df[column], errors='coerce')
+    elif target_type == 'datetime':
+        df[column] = pd.to_datetime(df[column], errors='coerce')
+```
+
+Using `errors='coerce'` converts unparseable values to `NaN`/`NaT` rather than raising exceptions -- essential for production pipelines where source data quality varies.
+
+### Null Handling Strategies
+
+Four strategies are available, selectable by configuration:
+
+```python
+# Strategy 1: Column-specific fill values
+df = df.fillna({'status': 'unknown', 'amount': 0.0, 'region': 'UNSPECIFIED'})
+
+# Strategy 2: Forward fill (carry last known value)
+df = df.fillna(method='ffill')
+
+# Strategy 3: Backward fill
+df = df.fillna(method='bfill')
+
+# Strategy 4: Statistical imputation (numeric columns only)
+numeric_cols = df.select_dtypes(include=[np.number]).columns
+df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].mean())   # or .median()
+```
+
+### Deduplication
+
+```python
+# Keep first occurrence, deduplicate on specific columns
+df = df.drop_duplicates(
+    subset=['customer_id', 'order_date'],  # None = all columns
+    keep='first',                           # 'first', 'last', or False (drop all dupes)
+)
+```
+
+### Aggregation with Multi-Level Flattening
+
+Grouped aggregations produce multi-level column names which the framework flattens automatically:
+
+```python
+aggregations = {
+    'revenue': ['sum', 'mean'],
+    'quantity': 'sum',
+    'order_id': 'count',
+}
+
+result = df.groupby(['region', 'product_category']).agg(aggregations).reset_index()
+
+# Flatten multi-level columns: ('revenue', 'sum') -> 'revenue_sum'
+if isinstance(result.columns, pd.MultiIndex):
+    result.columns = [
+        '_'.join(col).strip() if col[1] else col[0]
+        for col in result.columns.values
+    ]
+```
+
+### Pivot and Unpivot
+
+**Pivot** (rows to columns):
+```python
+pivoted = df.pivot_table(
+    index='region',
+    columns='quarter',
+    values='revenue',
+    aggfunc='sum',
+    fill_value=0,
+).reset_index()
+```
+
+**Unpivot / Melt** (columns to rows):
+```python
+melted = df.melt(
+    id_vars=['customer_id', 'region'],
+    value_vars=['q1_revenue', 'q2_revenue', 'q3_revenue', 'q4_revenue'],
+    var_name='quarter',
+    value_name='revenue',
+)
+```
+
+### Window Functions
+
+The framework supports row numbering, ranking, and running aggregations partitioned by group:
+
+```python
+windows = [
+    {
+        'column': 'revenue',
+        'function': 'row_number',
+        'partition_by': ['region'],
+        'order_by': ['event_date'],
+        'new_column': 'revenue_row_number',
+    },
+]
+
+# Partition then apply
+if partition_by:
+    grouped = df.groupby(partition_by)
+else:
+    grouped = df.groupby(lambda x: True)
+
+if function == 'row_number':
+    df = df.sort_values(order_by)
+    df[new_column] = grouped.cumcount() + 1
+```
+
+### Text Standardisation
+
+Multiple operations can be chained on text columns:
+
+```python
+operations = ['strip', 'lower', 'remove_extra_spaces']
+
+for column in text_columns:
+    if 'strip' in operations:
+        df[column] = df[column].str.strip()
+    if 'lower' in operations:
+        df[column] = df[column].str.lower()
+    if 'remove_extra_spaces' in operations:
+        df[column] = df[column].str.replace(r'\s+', ' ', regex=True)
+```
+
+### Date Part Extraction
+
+Decompose datetime columns into numeric components for downstream analytics:
+
+```python
+parts = ['year', 'month', 'day', 'weekday', 'quarter']
+
+df['event_date'] = pd.to_datetime(df['event_date'], errors='coerce')
+
+df['event_date_year']    = df['event_date'].dt.year
+df['event_date_month']   = df['event_date'].dt.month
+df['event_date_quarter'] = df['event_date'].dt.quarter
+df['event_date_weekday'] = df['event_date'].dt.dayofweek  # 0 = Monday
+```
+
+---
+
+## 12. Loading Patterns
+
+### BigQuery Loading with Partitioning and Clustering
+
+The `BigQueryLoader` builds a `LoadJobConfig` dynamically from configuration, supporting schema definition, time partitioning (DAY or MONTH), and clustering:
+
+```python
+from google.cloud import bigquery
+
+client = bigquery.Client(project=project_id)
+table_ref = f"{project_id}.{dataset_id}.{table_id}"
+
+job_config = bigquery.LoadJobConfig(
+    write_disposition='WRITE_APPEND',       # or WRITE_TRUNCATE
+    create_disposition='CREATE_IF_NEEDED',
+)
+
+# Dynamic schema from config
+job_config.schema = [
+    bigquery.SchemaField(f['name'], f['type'], mode=f.get('mode', 'NULLABLE'))
+    for f in schema_config
+]
+
+# Time partitioning
+job_config.time_partitioning = bigquery.TimePartitioning(
+    type_=bigquery.TimePartitioningType.DAY,  # or MONTH
+    field='event_date',
+)
+
+# Clustering
+job_config.clustering_fields = ['region', 'product_category']
+
+job = client.load_table_from_dataframe(df, table_ref, job_config=job_config)
+job.result()
+
+# Verify load
+table = client.get_table(table_ref)
+print(f"Loaded {job.output_rows} rows; table now has {table.num_rows} total")
+```
+
+### GCS Loading with Multi-Format Support
+
+The `GCSLoader` serialises DataFrames to CSV, JSON, or Parquet and uploads to a blob:
+
+```python
+from google.cloud import storage
+import io
+
+client = storage.Client(project=project_id)
+bucket = client.bucket(bucket_name)
+blob = bucket.blob(file_path)
+
+if file_format == 'csv':
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False, **csv_options)
+    blob.upload_from_string(buffer.getvalue(), content_type='text/csv')
+
+elif file_format == 'json':
+    buffer = io.StringIO()
+    df.to_json(buffer, orient='records', **json_options)
+    blob.upload_from_string(buffer.getvalue(), content_type='application/json')
+
+elif file_format == 'parquet':
+    buffer = io.BytesIO()
+    df.to_parquet(buffer, index=False, **parquet_options)
+    blob.upload_from_string(buffer.getvalue(), content_type='application/octet-stream')
+```
+
+### Cloud SQL Loading
+
+Uses `pd.to_sql` with chunked inserts and `if_exists` control:
+
+```python
+df.to_sql(
+    table_name,
+    engine,           # SQLAlchemy engine from Cloud SQL Connector
+    if_exists='append',  # 'append', 'replace', or 'fail'
+    index=False,
+    chunksize=10000,
+)
+```
+
+The `if_exists` parameter maps to common ETL strategies:
+- `'append'` -- incremental loading (equivalent to BigQuery `WRITE_APPEND`)
+- `'replace'` -- full refresh (drops and recreates the table)
+- `'fail'` -- safety guard for first-load scenarios
+
+### Multi-Destination Loading
+
+The `MultiDestinationLoader` fans out a single DataFrame to multiple targets, tracking success/failure per destination:
+
+```python
+config = {
+    'type': 'multi',
+    'destinations': [
+        {'type': 'bigquery', 'dataset': 'analytics', 'table': 'events'},
+        {'type': 'gcs', 'bucket': 'archive', 'file_path': 'events.parquet', 'format': 'parquet'},
+    ]
+}
+
+# Each destination is loaded independently
+results = []
+for dest_config in config['destinations']:
+    loader = DataLoader(dest_config)
+    result = loader.load(df)
+    results.append(result)
+
+# Check overall success
+all_succeeded = all(r['success'] for r in results)
+```
+
+This pattern is useful when the same transformed data must land in both an analytics warehouse (BigQuery) and a cold archive (GCS) simultaneously.
+
+---
+
 **Related notes:** [[Apache Spark Fundamentals]] | [[Airflow Orchestration Patterns]] | [[Terraform for Data Infrastructure]] | [[Docker & Container Patterns]] | [[Apache Kafka Fundamentals]] | [[CI/CD for Data Pipelines]]

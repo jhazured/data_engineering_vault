@@ -455,6 +455,586 @@ If tests consistently hit the memory ceiling, it signals either a memory leak or
 
 ---
 
+## Data Freshness Monitoring With SLA Thresholds
+
+The existing freshness gauge (above) captures *current* staleness, but production systems need tiered SLA thresholds per table so that alerts fire at the right urgency. The pattern below -- drawn from [[Fivetran]] connector monitoring -- classifies each table into `FRESH`, `WARNING`, or `STALE` based on connector-specific expectations.
+
+### SQL-Based Freshness Classification
+
+```sql
+-- Per-table freshness view with tiered SLA thresholds
+CREATE OR REPLACE VIEW fivetran_data_freshness AS
+SELECT
+    connector_name,
+    table_name,
+    last_sync_time,
+    DATEDIFF(minute, last_sync_time, CURRENT_TIMESTAMP()) AS minutes_since_last_sync,
+    CASE
+        WHEN DATEDIFF(minute, last_sync_time, CURRENT_TIMESTAMP()) > 120 THEN 'STALE'
+        WHEN DATEDIFF(minute, last_sync_time, CURRENT_TIMESTAMP()) > 60  THEN 'WARNING'
+        ELSE 'FRESH'
+    END AS freshness_status
+FROM (
+    SELECT 'azure_sql_connector' AS connector_name,
+           'shipments'           AS table_name,
+           MAX(updated_at)       AS last_sync_time
+    FROM raw.azure_shipments
+    UNION ALL
+    SELECT 'telematics_webhook_connector', 'vehicle_telemetry', MAX(timestamp)
+    FROM raw.telematics_data
+    -- ... additional tables
+);
+```
+
+Key design choices:
+
+- **Threshold values are per-connector, not global.** A webhook connector delivering telematics every 5 minutes has a tighter SLA than a batch connector syncing hourly. Encode these expectations explicitly rather than applying a single staleness window across the board.
+- **Three-tier classification** (`FRESH` / `WARNING` / `STALE`) maps directly to the escalation tiers defined in the Alerting Patterns section above. `WARNING` fires a Slack notification; `STALE` escalates to PagerDuty.
+- **Alert view** sits on top of the freshness view and selects only rows where `freshness_status = 'STALE'`, producing actionable alert messages with the connector name, table name, and minutes since last sync.
+
+### Freshness SLA Thresholds by Source Type
+
+| Source Type | Expected Frequency | Warning Threshold | Critical (Stale) Threshold |
+|-------------|-------------------|-------------------|----------------------------|
+| Webhook / streaming | 5 minutes | > 10 minutes | > 30 minutes |
+| REST API (traffic, weather) | 30 minutes | > 60 minutes | > 120 minutes |
+| Database connector (batch) | 60 minutes | > 120 minutes | > 240 minutes |
+| Daily file drop | 24 hours | > 26 hours | > 30 hours |
+
+---
+
+## Data Volume Anomaly Detection
+
+Beyond the Python-based z-score approach (above), SQL views can continuously monitor volume at the connector level. The critical case to catch is `NO_DATA` -- zero records -- which signals a broken connector or upstream outage rather than normal variance.
+
+### Volume Classification View
+
+```sql
+CREATE OR REPLACE VIEW fivetran_data_volume_monitoring AS
+SELECT
+    connector_name,
+    table_name,
+    record_count,
+    data_size_mb,
+    CASE
+        WHEN record_count = 0    THEN 'NO_DATA'
+        WHEN record_count < 100  THEN 'LOW_VOLUME'
+        WHEN record_count < 1000 THEN 'MEDIUM_VOLUME'
+        ELSE 'HIGH_VOLUME'
+    END AS volume_status
+FROM (
+    SELECT
+        'azure_sql_connector' AS connector_name,
+        'customers'           AS table_name,
+        COUNT(*)              AS record_count,
+        ROUND(SUM(LENGTH(TO_JSON(OBJECT_CONSTRUCT(*)))) / 1024 / 1024, 2) AS data_size_mb
+    FROM raw.azure_customers
+    -- ... UNION ALL for each monitored table
+);
+```
+
+### Volume Alert Escalation
+
+The alert view unions freshness, volume, and quality alerts into a single `fivetran_alert_conditions` view. Volume alerts use severity escalation:
+
+| Volume Status | Severity | Action |
+|---------------|----------|--------|
+| `NO_DATA` | CRITICAL | Immediate investigation -- connector may be broken or source system down |
+| `LOW_VOLUME` | MEDIUM | Review within hours -- possible partial sync or upstream filtering change |
+| `MEDIUM_VOLUME` / `HIGH_VOLUME` | INFO | No action required |
+
+The `data_size_mb` column (calculated via `OBJECT_CONSTRUCT(*)` serialisation in [[Snowflake]]) provides a secondary signal: if record count is normal but data size has halved, rows may be arriving with null or truncated columns.
+
+---
+
+## Connector Health Monitoring
+
+### Health Scoring Model
+
+A composite health score (0-100) per connector captures freshness, error rate, and throughput in a single number. This avoids the problem of separate alerts for related symptoms -- a connector that is both slow and stale is one issue, not two.
+
+```sql
+CREATE OR REPLACE VIEW fivetran_connector_health AS
+SELECT
+    connector_name,
+    connector_type,
+    last_sync_time,
+    sync_frequency_minutes,
+    records_synced_24h,
+    data_freshness_status,
+    error_count_24h,
+    overall_health_score,
+    CASE
+        WHEN overall_health_score >= 90 THEN 'EXCELLENT'
+        WHEN overall_health_score >= 80 THEN 'GOOD'
+        WHEN overall_health_score >= 70 THEN 'FAIR'
+        WHEN overall_health_score >= 60 THEN 'POOR'
+        ELSE 'CRITICAL'
+    END AS health_status
+FROM (
+    SELECT
+        'telematics_webhook_connector' AS connector_name,
+        'webhook'                      AS connector_type,
+        MAX(timestamp)                 AS last_sync_time,
+        5                              AS sync_frequency_minutes,
+        COUNT(*)                       AS records_synced_24h,
+        CASE
+            WHEN DATEDIFF(minute, MAX(timestamp), CURRENT_TIMESTAMP()) <= 10 THEN 'FRESH'
+            WHEN DATEDIFF(minute, MAX(timestamp), CURRENT_TIMESTAMP()) <= 30 THEN 'STALE'
+            ELSE 'CRITICAL'
+        END AS data_freshness_status,
+        0 AS error_count_24h,
+        CASE
+            WHEN DATEDIFF(minute, MAX(timestamp), CURRENT_TIMESTAMP()) <= 10 THEN 100
+            WHEN DATEDIFF(minute, MAX(timestamp), CURRENT_TIMESTAMP()) <= 30 THEN 80
+            ELSE 40
+        END AS overall_health_score
+    FROM raw.telematics_data
+    WHERE timestamp >= DATEADD(hour, -24, CURRENT_TIMESTAMP())
+    -- ... UNION ALL for each connector
+);
+```
+
+### Sync Frequency Analysis With Window Functions
+
+Use `LAG()` to measure the actual interval between consecutive syncs and compare it against the expected frequency. This catches connectors that are technically "active" but syncing far less often than configured.
+
+```sql
+CREATE OR REPLACE VIEW fivetran_sync_frequency AS
+SELECT
+    connector_name,
+    table_name,
+    expected_sync_frequency_minutes,
+    actual_avg_sync_frequency_minutes,
+    CASE
+        WHEN actual_avg_sync_frequency_minutes > expected_sync_frequency_minutes * 1.5 THEN 'SLOW'
+        WHEN actual_avg_sync_frequency_minutes < expected_sync_frequency_minutes * 0.5 THEN 'FAST'
+        ELSE 'NORMAL'
+    END AS sync_frequency_status
+FROM (
+    SELECT
+        'telematics_webhook_connector' AS connector_name,
+        'vehicle_telemetry'            AS table_name,
+        5                              AS expected_sync_frequency_minutes,
+        AVG(DATEDIFF(minute,
+            LAG(timestamp) OVER (ORDER BY timestamp),
+            timestamp
+        )) AS actual_avg_sync_frequency_minutes
+    FROM raw.telematics_data
+    WHERE timestamp >= DATEADD(day, -7, CURRENT_DATE())
+    -- ... UNION ALL for each connector/table
+);
+```
+
+The `SLOW` status (actual frequency exceeding 1.5x expected) fires a `FREQUENCY_ALERT`. A `FAST` status is unusual and may indicate duplicate syncs or a misconfigured schedule.
+
+### Connector Performance Trending
+
+Track daily aggregates of sync events, durations, and throughput using `LAG()` and `DATE_TRUNC` to build performance trend views:
+
+```sql
+SELECT
+    connector_name,
+    DATE_TRUNC('day', sync_time) AS sync_date,
+    COUNT(*)                     AS sync_events,
+    AVG(sync_duration_minutes)   AS avg_sync_duration,
+    MAX(sync_duration_minutes)   AS max_sync_duration,
+    SUM(records_synced)          AS total_records_synced,
+    AVG(records_per_minute)      AS avg_records_per_minute
+FROM connector_sync_detail
+GROUP BY connector_name, DATE_TRUNC('day', sync_time)
+ORDER BY connector_name, sync_date;
+```
+
+### Fleet Health Dashboard View
+
+A single summary view counts connectors by health tier for an at-a-glance fleet status:
+
+```sql
+SELECT
+    COUNT(*) AS total_connectors,
+    COUNT(CASE WHEN health_status = 'EXCELLENT' THEN 1 END) AS excellent,
+    COUNT(CASE WHEN health_status = 'CRITICAL'  THEN 1 END) AS critical,
+    AVG(overall_health_score) AS avg_health_score,
+    CASE
+        WHEN AVG(overall_health_score) >= 90 THEN 'EXCELLENT'
+        WHEN AVG(overall_health_score) >= 80 THEN 'GOOD'
+        WHEN AVG(overall_health_score) >= 70 THEN 'FAIR'
+        ELSE 'POOR'
+    END AS overall_system_health
+FROM fivetran_connector_health;
+```
+
+---
+
+## GCP Cloud Monitoring Patterns (Terraform)
+
+See also: [[Terraform]]
+
+The GCP monitoring module in `gcp_infra_terraform` defines dashboards, alert policies, notification channels, and uptime checks as Terraform resources. This infrastructure-as-code approach ensures monitoring configuration is version-controlled, peer-reviewed, and reproducible across environments.
+
+### Monitoring Dashboard as Code
+
+Cloud Monitoring dashboards are defined as JSON within `google_monitoring_dashboard`. The mosaic layout positions tiles on a grid:
+
+```hcl
+resource "google_monitoring_dashboard" "dashboard" {
+  count = var.create_dashboard ? 1 : 0
+
+  dashboard_json = jsonencode({
+    displayName = var.dashboard_name
+    mosaicLayout = {
+      tiles = [
+        {
+          width  = 6
+          height = 4
+          widget = {
+            title = "CPU Utilisation"
+            xyChart = {
+              dataSets = [{
+                timeSeriesQuery = {
+                  timeSeriesFilter = {
+                    filter = "metric.type=\"compute.googleapis.com/instance/cpu/utilization\""
+                    aggregation = {
+                      alignmentPeriod    = "60s"
+                      perSeriesAligner   = "ALIGN_MEAN"
+                      crossSeriesReducer = "REDUCE_MEAN"
+                    }
+                  }
+                }
+                plotType = "LINE"
+              }]
+            }
+          }
+        }
+        // Additional tiles: Memory, Disk, Network
+      ]
+    }
+  })
+
+  project = var.project_id
+}
+```
+
+Key patterns:
+- **Conditional creation** via `count` and a `var.create_dashboard` flag -- environments that do not need dashboards simply set it to `false`
+- **Aggregation settings**: `ALIGN_MEAN` with 60-second alignment smooths noisy metrics; `REDUCE_MEAN` aggregates across instances for fleet-level views
+- **Grid positioning**: `xPos` and `yPos` control tile layout (6-wide grid); related metrics should be placed adjacently
+
+### Alert Policies
+
+Each alert policy uses `condition_threshold` with a duration window to avoid transient spikes:
+
+```hcl
+resource "google_monitoring_alert_policy" "high_cpu" {
+  count        = var.enable_cpu_alerts ? 1 : 0
+  display_name = "High CPU Usage Alert"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "CPU utilisation is high"
+    condition_threshold {
+      filter          = "metric.type=\"compute.googleapis.com/instance/cpu/utilization\""
+      duration        = "300s"
+      comparison      = "COMPARISON_GREATER_THAN"
+      threshold_value = var.cpu_threshold
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MEAN"
+      }
+    }
+  }
+
+  notification_channels = var.notification_email != "" ? [
+    google_monitoring_notification_channel.email[0].id
+  ] : []
+
+  alert_strategy {
+    auto_close = "1800s"
+  }
+
+  project = var.project_id
+}
+```
+
+Pattern notes:
+- **Duration of 300s** means the condition must hold for 5 continuous minutes before firing -- this filters out momentary spikes
+- **Auto-close of 1800s** (30 minutes) automatically resolves the incident if the condition clears, preventing stale open alerts
+- **Notification channels** are conditionally attached -- if no email is configured, the alert still exists but does not notify (useful for non-production environments)
+- The same pattern applies for memory, disk, and instance-down alerts with different metric filters and thresholds
+
+### Notification Channels
+
+```hcl
+resource "google_monitoring_notification_channel" "email" {
+  count        = var.notification_email != "" ? 1 : 0
+  display_name = "Email Notification Channel"
+  type         = "email"
+  labels = {
+    email_address = var.notification_email
+  }
+  project = var.project_id
+}
+```
+
+Additional channel types: `slack`, `pagerduty`, `webhook`, `sms`. Each is a separate `google_monitoring_notification_channel` resource referenced by alert policies.
+
+### Uptime Checks
+
+```hcl
+resource "google_monitoring_uptime_check_config" "uptime_check" {
+  count        = var.enable_uptime_checks ? 1 : 0
+  display_name = var.uptime_check_name
+  timeout      = "10s"
+  period       = "60s"
+
+  http_check {
+    path           = var.uptime_check_path
+    port           = var.uptime_check_port
+    use_ssl        = var.uptime_check_use_ssl
+    request_method = "GET"
+  }
+
+  monitored_resource {
+    type = "uptime_url"
+    labels = {
+      host       = var.uptime_check_host
+      project_id = var.project_id
+    }
+  }
+}
+```
+
+Use uptime checks for pipeline API endpoints (e.g., a health-check endpoint on a Cloud Run ingestion service). A 60-second check period with a 10-second timeout catches outages within 2 minutes.
+
+---
+
+## Fabric Pipeline Execution Logging Patterns
+
+See also: [[Microsoft Fabric]]
+
+Microsoft Fabric pipelines use a T0 control layer for centralised logging. The pattern captures pipeline start, completion, and failure as rows in a dedicated log table, with indexes on `pipeline_name` and `status` for efficient querying.
+
+### Pipeline Log Table
+
+```sql
+CREATE TABLE t0.pipeline_log (
+    log_id         INT IDENTITY(1,1) PRIMARY KEY,
+    pipeline_name  VARCHAR(200) NOT NULL,
+    execution_id   VARCHAR(100),
+    start_time     DATETIME2 NOT NULL,
+    end_time       DATETIME2,
+    duration_seconds INT,
+    status         VARCHAR(20) NOT NULL,  -- Running, Success, Failed, Cancelled
+    rows_processed INT,
+    data_size_mb   DECIMAL(10,2),
+    error_message  VARCHAR(MAX),
+    created_at     DATETIME2 DEFAULT GETDATE()
+);
+
+CREATE INDEX idx_pipeline_log_name_time ON t0.pipeline_log(pipeline_name, start_time);
+CREATE INDEX idx_pipeline_log_status ON t0.pipeline_log(status, start_time);
+```
+
+### Logging Pipeline Events via Script Activities
+
+**On start** (Script Activity at pipeline entry):
+
+```sql
+INSERT INTO t0.pipeline_log (pipeline_name, execution_id, start_time, status)
+VALUES (
+    '@{pipeline().Pipeline}',
+    '@{pipeline().RunId}',
+    '@{pipeline().TriggerTime}',
+    'Running'
+);
+```
+
+**On success** (Script Activity after main processing):
+
+```sql
+UPDATE t0.pipeline_log
+SET end_time         = GETDATE(),
+    duration_seconds = DATEDIFF(SECOND, start_time, GETDATE()),
+    status           = 'Success',
+    rows_processed   = @{activity('CopyActivity').output.rowsCopied},
+    data_size_mb     = @{activity('CopyActivity').output.dataRead} / 1024.0 / 1024.0
+WHERE pipeline_name = '@{pipeline().Pipeline}'
+  AND execution_id  = '@{pipeline().RunId}'
+  AND status        = 'Running';
+```
+
+**On failure** (On Failure Activity path):
+
+```sql
+UPDATE t0.pipeline_log
+SET end_time         = GETDATE(),
+    duration_seconds = DATEDIFF(SECOND, start_time, GETDATE()),
+    status           = 'Failed',
+    error_message    = '@{activity('ErrorActivity').error.message}'
+WHERE pipeline_name = '@{pipeline().Pipeline}'
+  AND execution_id  = '@{pipeline().RunId}'
+  AND status        = 'Running';
+```
+
+### Fabric Monitoring Across Architecture Layers
+
+The T0-T5 architecture provides monitoring hooks at each layer:
+
+| Layer | What to Monitor | Key Metrics |
+|-------|----------------|-------------|
+| **T0** (Control) | Pipeline executions, error log, alert configuration | Execution count, failure rate, alert volume |
+| **T1** (Ingestion) | Data arrival, row counts, null checks | Records ingested, null percentage, freshness |
+| **T2** (SCD2) | Merge operations, slowly changing dimension processing | Rows merged, SCD2 version counts, duration |
+| **T3** (Transformation) | Business logic transforms, aggregations | Input/output row ratios, duration trends |
+| **T5** (Presentation) | View performance, query patterns | Query duration, cache hit rate |
+
+### Performance Logging Within Stored Procedures
+
+Wrap MERGE and transformation logic with timing instrumentation:
+
+```sql
+CREATE PROCEDURE t2.usp_merge_dim_department_with_perf
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @StartTime DATETIME2 = GETDATE();
+    DECLARE @RowsProcessed INT;
+
+    -- Main MERGE logic here
+    MERGE t2.dim_department AS target
+    USING (SELECT * FROM t1_department) AS source
+    ON target.dept_id = source.dept_id AND target.is_current = 1
+    WHEN MATCHED THEN UPDATE SET ...
+    WHEN NOT MATCHED THEN INSERT ...;
+
+    SET @RowsProcessed = @@ROWCOUNT;
+
+    INSERT INTO t0.performance_metrics (
+        component_type, component_name, execution_date,
+        duration_seconds, rows_processed
+    )
+    VALUES (
+        'StoredProcedure', 't2.usp_merge_dim_department',
+        @StartTime,
+        DATEDIFF(MILLISECOND, @StartTime, GETDATE()) / 1000.0,
+        @RowsProcessed
+    );
+END;
+```
+
+### Error Tracking With Severity-Based Escalation
+
+The Fabric error logging pattern uses a stored procedure that both logs the error and conditionally triggers alerts for `Critical` and `High` severity:
+
+```sql
+CREATE PROCEDURE t0.usp_log_error
+    @ComponentType  VARCHAR(50),
+    @ComponentName  VARCHAR(200),
+    @ErrorSeverity  VARCHAR(20),
+    @ErrorMessage   VARCHAR(MAX),
+    @ErrorDetails   VARCHAR(MAX) = NULL
+AS
+BEGIN
+    INSERT INTO t0.error_log (
+        component_type, component_name, error_severity,
+        error_message, error_details
+    )
+    VALUES (@ComponentType, @ComponentName, @ErrorSeverity,
+            @ErrorMessage, @ErrorDetails);
+
+    IF @ErrorSeverity IN ('Critical', 'High')
+    BEGIN
+        EXEC t0.usp_send_alert
+            @AlertType     = 'Error',
+            @ComponentName = @ComponentName,
+            @Message       = @ErrorMessage;
+    END
+END;
+```
+
+---
+
+## Pipeline SLO Definition Patterns
+
+Service Level Objectives (SLOs) formalise what "good" looks like for a data pipeline. While SLAs are contractual commitments to stakeholders, SLOs are internal engineering targets that the monitoring system enforces. Define SLOs across three dimensions: **latency**, **freshness**, and **completeness**.
+
+### The Three SLO Dimensions
+
+| Dimension | Definition | Example Target | How to Measure |
+|-----------|-----------|----------------|----------------|
+| **Latency** | Time from pipeline trigger to data availability | Orders pipeline completes within 10 minutes | `duration_seconds` in pipeline log or Prometheus histogram |
+| **Freshness** | Maximum age of the newest record in a table | Shipments table updated within 2 hours of real time | `DATEDIFF(minute, MAX(updated_at), CURRENT_TIMESTAMP())` |
+| **Completeness** | Proportion of expected records that arrived | >= 99.5% of source records land in the target | Compare source count vs target count per batch |
+
+### Defining SLOs Per Pipeline
+
+Encode SLO targets in a configuration table or YAML file so they are queryable and version-controlled:
+
+```sql
+-- Fabric T0 pattern: SLO configuration table
+CREATE TABLE t0.pipeline_slo (
+    slo_id             INT IDENTITY(1,1) PRIMARY KEY,
+    pipeline_name      VARCHAR(200) NOT NULL,
+    slo_dimension      VARCHAR(50)  NOT NULL,  -- Latency, Freshness, Completeness
+    target_value       DECIMAL(10,2) NOT NULL,
+    unit               VARCHAR(20)  NOT NULL,  -- seconds, minutes, percentage
+    warning_threshold  DECIMAL(10,2),
+    critical_threshold DECIMAL(10,2),
+    enabled            BIT DEFAULT 1
+);
+
+-- Example entries
+INSERT INTO t0.pipeline_slo VALUES
+    ('orders_etl',     'Latency',      600,   'seconds',    480,   540,   1),
+    ('orders_etl',     'Freshness',    120,   'minutes',    90,    110,   1),
+    ('orders_etl',     'Completeness', 99.5,  'percentage', 99.0,  98.0,  1),
+    ('telemetry_sync', 'Freshness',    10,    'minutes',    7,     9,     1);
+```
+
+### SLO Compliance Monitoring
+
+Join the SLO configuration table against actual metrics to compute compliance:
+
+```sql
+-- Check latency SLO compliance over the last 7 days
+SELECT
+    s.pipeline_name,
+    s.target_value AS slo_target_seconds,
+    COUNT(*) AS total_runs,
+    SUM(CASE WHEN p.duration_seconds <= s.target_value THEN 1 ELSE 0 END) AS runs_within_slo,
+    ROUND(
+        100.0 * SUM(CASE WHEN p.duration_seconds <= s.target_value THEN 1 ELSE 0 END) / COUNT(*),
+        2
+    ) AS slo_compliance_pct
+FROM t0.pipeline_slo s
+JOIN t0.pipeline_log p ON s.pipeline_name = p.pipeline_name
+WHERE s.slo_dimension = 'Latency'
+  AND s.enabled = 1
+  AND p.status = 'Success'
+  AND p.start_time >= DATEADD(day, -7, GETDATE())
+GROUP BY s.pipeline_name, s.target_value;
+```
+
+### Error Budgets
+
+An error budget is the inverse of the SLO: if the freshness SLO is 99.5% compliance over 30 days, the error budget allows 0.5% of measurements to breach the threshold. When the error budget is exhausted, freeze feature work and focus on reliability.
+
+```
+Error budget remaining = SLO target % - actual breach %
+Example: 99.5% target - 99.2% actual = 0.3% remaining (of 0.5% budget)
+```
+
+Track error budget burn rate. If 50% of the monthly budget is consumed in the first week, the trajectory suggests the SLO will be breached -- alert early rather than waiting for the end of the window.
+
+### SLO Review Cadence
+
+- **Weekly**: review SLO compliance dashboards, investigate breaches
+- **Monthly**: review error budget consumption, adjust thresholds if consistently too tight or too loose
+- **Quarterly**: re-evaluate whether SLO dimensions and targets still reflect business requirements
+
+---
+
 ## Summary Checklist
 
 - [ ] Structured JSON logging with context binding (job_name, run_id, stage)
@@ -467,3 +1047,12 @@ If tests consistently hit the memory ceiling, it signals either a memory leak or
 - [ ] Grafana or Cloud Monitoring dashboards with key pipeline metrics
 - [ ] Jenkins post-build archival of logs, test results, and coverage
 - [ ] GCP quota checks integrated into CI before job submission
+- [ ] Data freshness SLA thresholds per connector/source type
+- [ ] Volume anomaly detection with NO_DATA and LOW_VOLUME alerts
+- [ ] Connector health scoring with sync frequency analysis (window functions)
+- [ ] GCP Cloud Monitoring alert policies and dashboards defined in Terraform
+- [ ] Uptime checks for pipeline API endpoints
+- [ ] Fabric T0 pipeline execution logging (start, success, failure)
+- [ ] Performance instrumentation within stored procedures
+- [ ] Pipeline SLOs defined for latency, freshness, and completeness
+- [ ] Error budget tracking with burn-rate alerting

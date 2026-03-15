@@ -309,6 +309,158 @@ Query a batch: `SELECT * FROM "TBL_ETL_LOG" WHERE "BATCH_ID" = 42 ORDER BY "CREA
 
 ---
 
+## Advanced Snowflake SQL Patterns
+
+Patterns from audit views, monitoring procedures, and SCIM token management across the logistics analytics platform.
+
+### LATERAL FLATTEN for Unnesting VARIANT Arrays
+
+`LATERAL FLATTEN` converts a VARIANT array column into individual rows -- essential for querying Snowflake's semi-structured metadata views like `ACCESS_HISTORY`.
+
+```sql
+-- Unnest DIRECT_OBJECTS_ACCESSED (a VARIANT array of JSON objects)
+-- into one row per accessed object per query.
+select
+    ah.query_id
+    , ah.user_name
+    , obj.value:objectName::varchar       as object_name
+    , obj.value:objectDomain::varchar     as object_type
+    , obj.value:operationType::varchar    as operation_type
+    , obj.value:columns                   as columns_accessed_variant
+from SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY ah
+    , lateral flatten(input => ah.direct_objects_accessed) obj
+where
+    ah.query_start_time >= dateadd(day, -30, current_timestamp())
+```
+
+- The `obj` alias represents each element of the flattened array
+- Comma-join syntax (`, lateral flatten(...)`) is equivalent to `CROSS JOIN LATERAL`
+- `input =>` is required; the argument must be a VARIANT, OBJECT, or ARRAY column
+
+### JSON Column Access Patterns
+
+Extract typed values from VARIANT objects using colon notation with `::type` casting:
+
+```sql
+obj.value:objectName::varchar         -- extract string field
+obj.value:objectDomain::varchar       -- another string field
+obj.value:columns                     -- keep as raw VARIANT (nested array)
+```
+
+Key rules:
+
+- Field names after `:` are **case-sensitive** (match the JSON key exactly)
+- Cast with `::varchar`, `::number`, `::boolean`, `::timestamp` etc.
+- Omitting the cast returns VARIANT, which is useful when the value is itself a nested structure
+- For filtering, the cast must appear in the `WHERE` clause too: `obj.value:objectName::varchar ilike '%PATTERN%'`
+
+### TO_JSON for Searching Within VARIANT Arrays
+
+When a VARIANT column holds an array of objects (e.g. `[{columnName: 'X'}, ...]`), `TO_JSON` serialises it to a string so you can search with `ILIKE`:
+
+```sql
+-- Check whether any classified column was accessed
+-- columns_accessed_variant is an array: [{columnName: '...'}]
+(
+    to_json(columns_accessed_variant) ilike '%CUSTOMER_NAME%'
+    or to_json(columns_accessed_variant) ilike '%CONTACT_EMAIL%'
+    or to_json(columns_accessed_variant) ilike '%CONTACT_PHONE%'
+)                                               as accessed_classified_columns
+```
+
+This is a pragmatic alternative to a second `LATERAL FLATTEN` + filter when you only need a boolean "does it contain X?" check. Trade-off: `TO_JSON` serialises the entire array on every row, so it is less efficient than a targeted flatten for large arrays.
+
+### QUALIFY Clause for Row Deduplication
+
+`QUALIFY` filters on window function results without a wrapping CTE or subquery -- Snowflake-specific syntax (not ANSI SQL):
+
+```sql
+-- Keep only the most recent SCIM token per application
+select
+    SPLIT_PART(QUERY_TEXT, '''', 2)  as APP,
+    ADD_MONTHS(START_TIME, 6)        as EXPIRES_ON,
+    DATEDIFF('DAY', CURRENT_TIMESTAMP(), ADD_MONTHS(END_TIME, 6)) as EXPIRES_IN_DAYS
+from SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+where
+    EXECUTION_STATUS = 'SUCCESS'
+    and QUERY_TEXT ilike 'SELECT%SYSTEM$GENERATE_SCIM_ACCESS_TOKEN%'
+qualify ROW_NUMBER() over (partition by APP order by EXPIRES_ON desc) = 1
+```
+
+Contrast with the CTE approach already used in `VW_FLIGHTS_SILVER` (section 3 above), where dedup uses `WHERE RN = 1` in a second CTE. `QUALIFY` achieves the same in fewer lines:
+
+```sql
+-- Equivalent to: WITH ranked AS (... ROW_NUMBER() ... AS rn) SELECT ... WHERE rn = 1
+select *
+from source_table
+qualify row_number() over (partition by natural_key order by updated_at desc) = 1
+```
+
+### OBJECT_CONSTRUCT for Building JSON Objects
+
+`OBJECT_CONSTRUCT` creates a VARIANT object from key-value pairs -- useful for structured alert payloads and logging:
+
+```sql
+-- Build a structured alert payload for the monitoring system
+OBJECT_CONSTRUCT(
+    'check_time',        CURRENT_TIMESTAMP(),
+    'stale_table_count', :stale_count,
+    'sla_hours',         6
+)
+
+-- Cost monitoring variant
+OBJECT_CONSTRUCT(
+    'check_time',     CURRENT_TIMESTAMP(),
+    'daily_credits',  :daily_credits,
+    'threshold',      :threshold
+)
+```
+
+- Accepts alternating key (string) / value (any type) arguments
+- Output is VARIANT; store in VARIANT columns or pass to procedures
+- Pairs with `TO_JSON()` when the object needs to be rendered as a string (e.g. in email bodies): `TO_JSON(ALERT_DATA)`
+
+### PARSE_JSON for String-to-VARIANT Conversion
+
+`PARSE_JSON` converts a JSON string literal into a VARIANT value -- the inverse of `TO_JSON`:
+
+```sql
+-- Convert a JSON string into a queryable VARIANT
+select parse_json('{"name": "warehouse_01", "credits": 42.5}') as config;
+
+-- Access fields from the result
+select config:name::varchar, config:credits::number
+from (select parse_json('{"name": "warehouse_01", "credits": 42.5}') as config);
+```
+
+Common use cases:
+
+- Ingesting JSON payloads from external stages or APIs into VARIANT columns
+- Building test fixtures in development queries
+- Converting string parameters into structured objects inside stored procedures
+
+### Execution Plan Reading Tips
+
+Snowflake does not expose traditional `EXPLAIN` output. Use the **Query Profile** in the web UI instead.
+
+| Technique | How |
+|-----------|-----|
+| Query Profile | Snowsight -> Query History -> select query -> Query Profile tab |
+| `EXPLAIN` (limited) | `EXPLAIN USING TEXT SELECT ...` returns a simplified plan; no cost estimates |
+| `SYSTEM$EXPLAIN_PLAN_JSON` | `SELECT SYSTEM$EXPLAIN_PLAN_JSON('SELECT ...')` returns the plan as JSON |
+| Result scan | `SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))` to inspect metadata of the last query |
+
+What to look for in the Query Profile:
+
+- **Percentage of total time** per operator -- identifies the bottleneck
+- **Bytes scanned vs. bytes sent** -- indicates partition pruning effectiveness
+- **Spillage to local/remote storage** -- suggests the warehouse is undersized for that query
+- **Exploding joins** -- row count increases dramatically at a join node
+
+See [[SQL Query Optimization]] for general query tuning strategies.
+
+---
+
 ## Related
 
 - [[SQL Stored Procedures]]

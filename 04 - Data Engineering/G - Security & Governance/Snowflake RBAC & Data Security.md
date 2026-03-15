@@ -241,3 +241,167 @@ CREATE NETWORK POLICY IF NOT EXISTS OFFICE_POLICY
 
 ALTER ACCOUNT SET NETWORK_POLICY = OFFICE_POLICY;
 ```
+
+---
+
+## Extended Role Hierarchy (Logistics Analytics Platform)
+
+The logistics-analytics-platform introduces a deeper, domain-specific role hierarchy that extends the base pattern above with specialised roles for ML engineering, data stewardship, and dbt environment isolation.
+
+### Full Role Set
+
+```
+ACCOUNTADMIN
+    └── SYSADMIN
+        ├── DATA_ENGINEER      — full pipeline access, all schema writes
+        │   ├── DATA_ANALYST   — marts and analytics read access
+        │   │   └── BUSINESS_USER — read-only analytics views
+        │   ├── DATA_SCIENTIST — ML features, ML objects, feature store
+        │   └── ML_ENGINEER    — ML features, ML serving, model deployment
+        ├── DBT_DEV_ROLE       — inherits DATA_ENGINEER, full dev environment
+        ├── DBT_STAGING_ROLE   — inherits DATA_ENGINEER, full staging environment
+        └── DBT_PROD_ROLE      — inherits DATA_ENGINEER, full production environment
+    └── SECURITYADMIN
+        ├── SECURITY_ADMIN     — security schema only, access control policies
+        └── DATA_STEWARD       — governance schema, data quality and compliance
+```
+
+Key design decisions:
+- **DATA_ANALYST inherits BUSINESS_USER** -- analysts can see everything business users can, plus marts-level detail
+- **DATA_SCIENTIST and ML_ENGINEER are peers** under DATA_ENGINEER, not hierarchically related to each other
+- **dbt roles inherit DATA_ENGINEER** rather than being separate -- this ensures dbt runs have the same permissions as manual engineering work
+- **DATA_STEWARD sits under SECURITYADMIN**, not SYSADMIN, to enforce separation of duties between data operations and governance oversight
+
+### Role Descriptions
+
+| Role | Responsibility | Schema Access |
+|------|---------------|---------------|
+| `DATA_ENGINEER` | Pipeline development, all data layers | RAW, STAGING, MARTS, ML_FEATURES, SNAPSHOTS, MONITORING, PERFORMANCE |
+| `DATA_ANALYST` | Business analysis, reporting | MARTS (core + analytics) |
+| `DATA_SCIENTIST` | Model development, experimentation | ML_FEATURES, ML_OBJECTS, ML_SERVING |
+| `ML_ENGINEER` | Model deployment, feature engineering | ML_FEATURES, ML_OBJECTS, ML_SERVING, ANALYTICS_ML_FEATURES |
+| `BUSINESS_USER` | Stakeholder read-only access | Analytics views only |
+| `DATA_STEWARD` | Data quality, compliance | GOVERNANCE |
+| `SECURITY_ADMIN` | Access control, security policies | SECURITY |
+
+### Role Creation
+
+```sql
+CREATE ROLE IF NOT EXISTS DATA_ENGINEER;
+CREATE ROLE IF NOT EXISTS DATA_ANALYST;
+CREATE ROLE IF NOT EXISTS DATA_SCIENTIST;
+CREATE ROLE IF NOT EXISTS ML_ENGINEER;
+CREATE ROLE IF NOT EXISTS BUSINESS_USER;
+CREATE ROLE IF NOT EXISTS DATA_STEWARD;
+CREATE ROLE IF NOT EXISTS SECURITY_ADMIN;
+
+-- Hierarchy
+GRANT ROLE DATA_ANALYST TO ROLE DATA_ENGINEER;
+GRANT ROLE BUSINESS_USER TO ROLE DATA_ANALYST;
+GRANT ROLE DATA_SCIENTIST TO ROLE DATA_ENGINEER;
+GRANT ROLE ML_ENGINEER TO ROLE DATA_ENGINEER;
+```
+
+## Multi-Environment dbt Role Isolation
+
+The logistics-analytics-platform uses environment-specific dbt roles with dedicated warehouse sizing:
+
+### dbt Role Pattern
+
+```sql
+CREATE ROLE IF NOT EXISTS DBT_DEV_ROLE;
+CREATE ROLE IF NOT EXISTS DBT_STAGING_ROLE;
+CREATE ROLE IF NOT EXISTS DBT_PROD_ROLE;
+
+-- Each inherits DATA_ENGINEER
+GRANT ROLE DATA_ENGINEER TO ROLE DBT_DEV_ROLE;
+GRANT ROLE DATA_ENGINEER TO ROLE DBT_STAGING_ROLE;
+GRANT ROLE DATA_ENGINEER TO ROLE DBT_PROD_ROLE;
+```
+
+### Environment-Specific Database Naming
+
+Use an environment variable to drive the target database, keeping the SQL scripts reusable across DEV, STAGING, and PROD:
+
+```sql
+SET DATABASE_NAME = IFNULL($SF_DATABASE, 'LOGISTICS_DW_DEV');
+
+-- All grants reference IDENTIFIER($DATABASE_NAME)
+GRANT USAGE ON DATABASE IDENTIFIER($DATABASE_NAME) TO ROLE DATA_ENGINEER;
+GRANT USAGE ON DATABASE IDENTIFIER($DATABASE_NAME) TO ROLE DBT_DEV_ROLE;
+```
+
+This pattern allows the same permission script to run in any environment by changing one variable:
+- `SF_DATABASE=LOGISTICS_DW_DEV` for development
+- `SF_DATABASE=LOGISTICS_DW_STAGING` for staging
+- `SF_DATABASE=LOGISTICS_DW_PROD` for production
+
+### Warehouse-to-Role Mapping (Logistics Platform)
+
+| Warehouse | Size | Assigned Role | Purpose |
+|-----------|------|--------------|---------|
+| `COMPUTE_WH_XS` | X-Small | DATA_ENGINEER, DBT_DEV_ROLE | Development, light transforms |
+| `COMPUTE_WH_SMALL` | Small | DATA_ANALYST, DBT_STAGING_ROLE | Reporting, staging dbt runs |
+| `COMPUTE_WH_MEDIUM` | Medium | ML_ENGINEER, DBT_PROD_ROLE | Production dbt, ML workloads |
+| `COMPUTE_WH_LARGE` | Large | DATA_SCIENTIST | Heavy ML training, feature engineering |
+
+## Schema-Level Least Privilege
+
+The logistics platform applies granular schema-level grants rather than database-wide access. The principle: each role only gets `USAGE` and `CREATE` on the schemas it needs.
+
+### Schema Access Matrix
+
+| Schema | DATA_ENGINEER | DATA_ANALYST | ML_ENGINEER | DATA_SCIENTIST | DATA_STEWARD | SECURITY_ADMIN |
+|--------|:---:|:---:|:---:|:---:|:---:|:---:|
+| RAW | RW | - | - | - | - | - |
+| STAGING | RW | - | - | - | - | - |
+| MARTS | RW | R | - | - | - | - |
+| ML_FEATURES | RW | - | RW | R | - | - |
+| ML_OBJECTS | RW | - | RW | R | - | - |
+| ML_SERVING | RW | - | RW | R | - | - |
+| SNAPSHOTS | RW | - | - | - | - | - |
+| MONITORING | RW | - | - | - | - | - |
+| GOVERNANCE | RW | - | - | - | RW | - |
+| SECURITY | - | - | - | - | - | RW |
+| PERFORMANCE | RW | - | - | - | - | - |
+
+**R** = USAGE + SELECT, **RW** = USAGE + CREATE TABLE + CREATE VIEW
+
+### Future Grants
+
+Future grants ensure new objects automatically inherit the correct permissions:
+
+```sql
+-- Analysts automatically get SELECT on new marts tables
+GRANT SELECT ON FUTURE TABLES IN SCHEMA $MARTS_SCHEMA TO ROLE DATA_ANALYST;
+
+-- ML roles automatically get SELECT on new feature tables
+GRANT SELECT ON FUTURE TABLES IN SCHEMA $ML_FEATURES_SCHEMA TO ROLE ML_ENGINEER;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA $ML_FEATURES_SCHEMA TO ROLE DATA_SCIENTIST;
+
+-- Data stewards automatically get SELECT on governance tables
+GRANT SELECT ON FUTURE TABLES IN SCHEMA $GOVERNANCE_SCHEMA TO ROLE DATA_STEWARD;
+
+-- Security admin automatically gets SELECT on security views
+GRANT SELECT ON FUTURE VIEWS IN SCHEMA $SECURITY_SCHEMA TO ROLE SECURITY_ADMIN;
+```
+
+## Security Gaps and Recommendations
+
+Observations from the logistics-analytics-platform implementation:
+
+1. **No row-level security** -- the platform relies entirely on role-based schema access; no RLS predicates are defined for multi-tenant or regional filtering. Consider adding [[Cross-Platform IAM & Data Governance#Row-Level Security Across Platforms|RLS patterns]] if the platform serves multiple business units.
+
+2. **dbt roles are overly broad** -- `DBT_DEV_ROLE`, `DBT_STAGING_ROLE`, and `DBT_PROD_ROLE` all receive `USAGE + CREATE TABLE + CREATE VIEW ON ALL SCHEMAS`. In production, the dbt role should be restricted to only the schemas dbt actually writes to (e.g., MARTS, STAGING) and denied access to SECURITY and GOVERNANCE schemas.
+
+3. **No dynamic data masking** -- the data classification seed pattern (above) identifies PII columns, but the logistics platform does not apply masking policies. Adding `CREATE MASKING POLICY` for PII_HIGH columns would close this gap.
+
+4. **Missing SECURITY_ADMIN to SECURITYADMIN grant** -- the custom SECURITY_ADMIN role is not explicitly granted to the built-in SECURITYADMIN role, which could create orphaned permissions.
+
+5. **No network policy applied** -- the logistics platform scripts do not set a network policy. Apply the OFFICE_POLICY pattern documented above.
+
+## Related Notes
+
+- [[Cross-Platform IAM & Data Governance]] -- GCP IAM, Azure/Fabric RLS, and cross-platform comparison
+- [[Snowflake Pipeline Patterns]] -- dbt model configuration and incremental strategies
+- [[Data Contracts & Schema Evolution]] -- governance patterns for schema changes
