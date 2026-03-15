@@ -233,3 +233,210 @@ SELECT * FROM {{ source('raw', 'events') }}
 **Runbooks for operational procedures.**
 - Step-by-step for common incidents: pipeline failure, data backfill, access requests.
 - Include commands, expected outputs, escalation contacts. Test quarterly.
+
+---
+
+## 11. Per-Domain Best Practices: SQL
+
+### Query Patterns
+
+**Use CTEs for readability and composability.**
+- Structure queries as a chain of named CTEs, each performing one logical step.
+- Final `SELECT` assembles the result from upstream CTEs.
+- Prefer `WITH` over nested subqueries -- they are easier to test, debug, and refactor.
+
+**Window functions for ranking, running totals, and deduplication.**
+```sql
+-- Deduplicate using ROW_NUMBER
+WITH ranked AS (
+    SELECT *,
+        ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY updated_at DESC) AS rn
+    FROM raw_customers
+)
+SELECT * FROM ranked WHERE rn = 1;
+```
+
+**QUALIFY for concise window filtering (Snowflake, BigQuery, Databricks).**
+```sql
+SELECT *
+FROM raw_events
+QUALIFY ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY received_at DESC) = 1;
+```
+
+**Parameterise date ranges.**
+- Never hard-code dates. Use variables, macros, or Jinja templates.
+- Pattern: `WHERE event_date BETWEEN {{ start_date }} AND {{ end_date }}`.
+
+**Use MERGE for idempotent loads.**
+- MERGE handles insert/update/delete in a single atomic statement.
+- Always include `updated_at` timestamps in the MATCHED clause.
+
+### Anti-Patterns
+
+- **SELECT DISTINCT as a fix for duplicates** -- indicates a join or source issue. Fix the root cause rather than masking it.
+- **Correlated subqueries in SELECT** -- replace with JOINs or window functions. Correlated subqueries execute once per row.
+- **OR in JOIN conditions** -- creates cross joins internally. Refactor into UNION ALL of separate joins.
+- **Implicit type conversions** -- always CAST explicitly. Implicit conversions prevent predicate pushdown and clustering pruning.
+- **Functions on indexed/clustered columns in WHERE** -- `WHERE YEAR(event_date) = 2026` cannot use clustering. Write `WHERE event_date >= '2026-01-01' AND event_date < '2027-01-01'`.
+- **Cartesian joins without explicit CROSS JOIN** -- accidental cartesian products from missing ON clauses. Always specify join conditions.
+- **Overusing UNION when UNION ALL suffices** -- `UNION` forces a sort/distinct operation. Use `UNION ALL` unless deduplication is genuinely needed.
+
+---
+
+## 12. Per-Domain Best Practices: Python
+
+### Project Structure
+
+```
+project_root/
+    src/
+        project_name/
+            __init__.py
+            extract/          # Source-specific extractors
+            transform/        # Pure transformation functions
+            load/             # Target-specific loaders
+            utils/            # Shared helpers (logging, config, retry)
+    tests/
+        unit/                 # Fast, no external dependencies
+        integration/          # Requires database/API access
+        fixtures/             # Shared test data
+    pyproject.toml            # Project metadata, dependencies, tool config
+    Dockerfile
+    Makefile                  # Common commands: test, lint, format, build
+```
+
+### Testing Strategy
+
+- **Unit tests** -- test every transformation function in isolation. Use `pytest` with parametrised fixtures for edge cases (nulls, empty DataFrames, type mismatches).
+- **Integration tests** -- test against real connections in CI. Use test containers or ephemeral cloud resources. Clean up after each test.
+- **Property-based testing** -- use `hypothesis` for data transformation functions. Generate random inputs and assert invariants (row count preservation, column types, non-negativity).
+
+```python
+import pytest
+import pandas as pd
+from project_name.transform import deduplicate_customers
+
+def test_deduplicate_keeps_latest():
+    df = pd.DataFrame({
+        "customer_id": [1, 1, 2],
+        "name": ["Alice", "Alice Updated", "Bob"],
+        "updated_at": ["2026-01-01", "2026-02-01", "2026-01-15"],
+    })
+    result = deduplicate_customers(df)
+    assert len(result) == 2
+    assert result.loc[result["customer_id"] == 1, "name"].iloc[0] == "Alice Updated"
+```
+
+### Packaging
+
+- Use `pyproject.toml` (PEP 621) as the single source of truth for metadata, dependencies, and tool configuration.
+- Pin dependencies with `pip-compile` or `poetry.lock` for reproducible builds.
+- Publish internal packages to a private PyPI (AWS CodeArtifact, GCP Artifact Registry, Azure Artifacts).
+- Prefer `src/` layout to prevent accidental imports from the project root.
+
+### Code Quality Tooling
+
+| Tool | Purpose |
+|------|---------|
+| `ruff` | Linting and formatting (replaces flake8, isort, black) |
+| `mypy` | Static type checking |
+| `pytest` | Test runner with fixtures and parametrisation |
+| `pre-commit` | Git hooks for automated checks before commit |
+
+---
+
+## 13. Per-Domain Best Practices: dbt
+
+### Model Organisation
+
+Follow the staging/intermediate/marts layering convention:
+
+```
+models/
+    staging/           # 1:1 with source tables, light renaming/casting
+        stg_orders.sql
+        stg_customers.sql
+    intermediate/      # Business logic joins and transformations
+        int_order_items_enriched.sql
+    marts/             # Final business entities for consumers
+        fct_orders.sql
+        dim_customers.sql
+```
+
+- **Staging** -- one model per source table. `SELECT` from `{{ source() }}`, rename columns to consistent conventions, cast types, filter soft deletes. Materialise as views.
+- **Intermediate** -- join staging models, apply business rules. Materialise as ephemeral or views.
+- **Marts** -- consumer-facing tables. Materialise as tables or incremental.
+
+### Naming Conventions
+
+| Layer | Prefix | Example |
+|-------|--------|---------|
+| Staging | `stg_` | `stg_stripe__payments` |
+| Intermediate | `int_` | `int_payments_enriched` |
+| Facts | `fct_` | `fct_orders` |
+| Dimensions | `dim_` | `dim_customers` |
+| Snapshots | `snap_` | `snap_orders` |
+| Macros | Verb-first | `generate_surrogate_key` |
+
+Use double underscores to separate source system from entity: `stg_shopify__orders`.
+
+### Testing Strategy
+
+- **Primary keys** -- `unique` + `not_null` on every model's primary key. No exceptions.
+- **Foreign keys** -- `relationships` test for every foreign key reference.
+- **Business rules** -- custom schema tests or `dbt_expectations` package for range checks, regex patterns, recency.
+- **Source freshness** -- `loaded_at_field` in source definitions with `warn_after` and `error_after` thresholds.
+- **CI testing** -- `dbt build` in CI on every pull request. Use `--select state:modified+` to test only changed models and their downstream dependants.
+
+### Materialisation Selection
+
+| Materialisation | When to Use |
+|----------------|-------------|
+| **View** | Staging models, lightweight transformations, always-fresh requirements |
+| **Table** | Mart models < 100M rows, infrequently queried intermediate results |
+| **Incremental** | Large fact tables (> 100M rows), event streams, append-heavy data |
+| **Ephemeral** | Intermediate CTEs that should not be materialised, used only by one downstream model |
+| **Snapshot** | SCD Type 2 tracking of source data changes |
+
+Avoid incremental models until the table justifies it -- incremental adds complexity (merge keys, late-arriving data handling, full-refresh requirements).
+
+---
+
+## 14. Per-Domain Best Practices: Snowflake
+
+### Warehouse Sizing and Management
+
+- **Start small** -- XS for most workloads. Scale up only when query profile shows queuing or spilling.
+- **Workload isolation** -- separate warehouses for loading (`LOADING_WH`), transformation (`TRANSFORM_WH`), analytics (`ANALYTICS_WH`), and dbt CI (`CI_WH`).
+- **Multi-cluster for concurrency** -- when queries queue due to concurrency, use multi-cluster warehouses (scaling policy: standard for predictable, economy for variable).
+- **Auto-suspend aggressively** -- `AUTO_SUSPEND = 60` for interactive warehouses, `AUTO_SUSPEND = 0` (immediate) for batch workloads that run and stop.
+- **Query timeout** -- set `STATEMENT_TIMEOUT_IN_SECONDS = 3600` to prevent runaway queries consuming credits for hours.
+
+### Clustering Keys
+
+- **When to cluster** -- tables with > 500M rows where queries consistently filter on the same columns.
+- **Column selection** -- choose columns that appear in `WHERE` and `JOIN` clauses. Prefer low-to-medium cardinality (dates, categories) over high cardinality (UUIDs).
+- **Compound keys** -- cluster on up to 3-4 columns. Order from lowest to highest cardinality.
+- **Monitor** -- `SELECT SYSTEM$CLUSTERING_INFORMATION('schema.table', '(cluster_col)')`. Target average clustering depth < 2.
+- **Automatic Clustering** -- enable `ALTER TABLE SET CLUSTER BY (col1, col2)` and let Snowflake manage reclustering automatically.
+
+### Query Profiling
+
+Use the Query Profile in the Snowflake UI for performance diagnosis:
+
+| Indicator | Problem | Resolution |
+|-----------|---------|------------|
+| **Bytes spilled to local storage** | Insufficient memory for sort/join | Scale up warehouse or reduce data volume with filters |
+| **Bytes spilled to remote storage** | Severe memory pressure | Scale up warehouse; add clustering to reduce scan |
+| **Partition pruning ratio low** | Poor clustering or missing filters | Add clustering keys; add date range filters |
+| **Exploding joins** | Join produces more rows than inputs | Check join keys for duplicates; add deduplication upstream |
+| **Full table scan** | No predicates or clustering | Add WHERE clauses on clustered columns |
+
+### Cost Control
+
+- **Resource monitors** -- create per-warehouse and account-level monitors. Alert at 75%, suspend at 100% of monthly budget.
+- **Query tagging** -- `ALTER SESSION SET QUERY_TAG = 'dbt_run_daily'`. Enables cost attribution by pipeline, team, or project.
+- **Zero-copy clones** -- use `CREATE TABLE clone_table CLONE source_table` for dev/test environments instead of full copies.
+- **Transient tables** -- use `CREATE TRANSIENT TABLE` for staging tables that do not need Fail-safe storage (saves 7 days of storage costs).
+- **Time Travel minimisation** -- set `DATA_RETENTION_TIME_IN_DAYS = 1` for staging/transient data (default is 1 for standard, up to 90 for enterprise).
+- **Storage monitoring** -- query `SNOWFLAKE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS` monthly to identify bloated tables with excessive Time Travel or Fail-safe storage.

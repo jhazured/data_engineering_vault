@@ -394,3 +394,266 @@ This keeps the consumer alive (heartbeats continue) whilst preventing unbounded 
 - Add consumers to the group (up to the number of partitions) — partitions are redistributed automatically
 - If lag persists at max consumers, increase the partition count on the topic to allow greater parallelism
 - Tune `fetch.min.bytes` and `fetch.max.wait.ms` to optimise batch sizes for throughput vs latency
+
+---
+
+## Kafka Connect Framework
+
+Kafka Connect is a scalable, fault-tolerant framework for streaming data between Kafka and external systems without writing custom producer/consumer code. It handles serialisation, offset management, fault tolerance, and parallelism out of the box.
+
+### Architecture
+
+```
+                    Kafka Connect Cluster
+┌──────────────────────────────────────────────────────┐
+│  Worker 1                    Worker 2                 │
+│  ┌─────────────────────┐     ┌─────────────────────┐ │
+│  │ Connector Instance  │     │ Connector Instance  │ │
+│  │  ├── Task 0         │     │  ├── Task 2         │ │
+│  │  └── Task 1         │     │  └── Task 3         │ │
+│  │                     │     │                     │ │
+│  │ Converter (Avro)    │     │ Converter (Avro)    │ │
+│  │ Transform (SMT)     │     │ Transform (SMT)     │ │
+│  └─────────────────────┘     └─────────────────────┘ │
+└──────────────────────────────────────────────────────┘
+         │                              │
+         ▼                              ▼
+    Kafka Brokers (data + offsets + config topics)
+```
+
+**Core components:**
+
+| Component | Role |
+|-----------|------|
+| **Worker** | JVM process that executes connectors and tasks. Workers form a Connect cluster and distribute work |
+| **Connector** | Plugin that defines how to interact with an external system. Manages task lifecycle and configuration |
+| **Task** | The unit of parallelism. Each task handles a subset of the data (e.g., one table, one topic partition) |
+| **Converter** | Serialises/deserialises between Connect's internal data format and Kafka record bytes (Avro, JSON, Protobuf) |
+| **Transform (SMT)** | Single Message Transform — lightweight per-record transformations applied in the connector pipeline |
+
+### Source vs Sink Connectors
+
+```
+Source Connector:                    Sink Connector:
+External System → Kafka              Kafka → External System
+
+┌──────────┐    ┌─────┐             ┌─────┐    ┌──────────┐
+│ Database │──► │Kafka│             │Kafka│──► │    S3    │
+│ (CDC)    │    │Topic│             │Topic│    │  Bucket  │
+└──────────┘    └─────┘             └─────┘    └──────────┘
+
+Source manages:                     Sink manages:
+- Polling/CDC from source           - Consuming from Kafka
+- Source offsets (position tracking) - Consumer offsets (automatic)
+- Schema discovery                  - Writing to external system
+- Partitioning across tasks         - Delivery guarantees
+```
+
+### Common Connectors
+
+| Connector | Type | Description | Common Use |
+|-----------|------|-------------|------------|
+| **Debezium** | Source | CDC from databases (Postgres, MySQL, SQL Server, Oracle, MongoDB) | Real-time change capture for event-driven architectures |
+| **JDBC Source** | Source | Poll-based reads from any JDBC database | Incremental loads from OLTP databases |
+| **JDBC Sink** | Sink | Write to any JDBC database | Stream processing results to operational stores |
+| **S3 Sink** | Sink | Write to AWS S3 in Parquet, Avro, JSON, or CSV | Data lake ingestion from Kafka |
+| **GCS Sink** | Sink | Write to Google Cloud Storage | GCP data lake ingestion |
+| **Elasticsearch Sink** | Sink | Index documents in Elasticsearch/OpenSearch | Real-time search indexing |
+| **BigQuery Sink** | Sink | Stream records to BigQuery | GCP analytics pipeline |
+| **Snowflake Sink** | Sink | Load data into Snowflake via internal stage | Warehouse ingestion |
+| **HTTP Source/Sink** | Both | REST API integration | Webhook ingestion, API-based sinks |
+| **FileStream** | Both | Read/write local files | Development and testing only |
+
+### Distributed vs Standalone Mode
+
+| Aspect | Distributed Mode | Standalone Mode |
+|--------|-----------------|-----------------|
+| **Workers** | Multiple (cluster) | Single process |
+| **Fault tolerance** | Tasks redistributed on worker failure | No failover |
+| **Configuration** | REST API (dynamic) | Properties file (static) |
+| **Offset storage** | Kafka topics (`connect-offsets`, `connect-configs`, `connect-status`) | Local file |
+| **Scaling** | Add/remove workers dynamically | Cannot scale |
+| **Use case** | Production | Development, edge deployments |
+
+### Connector Configuration Examples
+
+```json
+{
+  "name": "postgres-cdc-source",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres.internal",
+    "database.port": "5432",
+    "database.user": "debezium",
+    "database.password": "${secrets:postgres/password}",
+    "database.dbname": "orders_db",
+    "database.server.name": "orders",
+    "schema.include.list": "public",
+    "table.include.list": "public.orders,public.customers",
+    "plugin.name": "pgoutput",
+    "slot.name": "debezium_slot",
+    "publication.name": "debezium_pub",
+    "topic.prefix": "cdc.orders",
+    "key.converter": "io.confluent.connect.avro.AvroConverter",
+    "key.converter.schema.registry.url": "http://schema-registry:8081",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081",
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState"
+  }
+}
+```
+
+```json
+{
+  "name": "s3-sink-parquet",
+  "config": {
+    "connector.class": "io.confluent.connect.s3.S3SinkConnector",
+    "topics": "cdc.orders.public.orders",
+    "s3.bucket.name": "data-lake-raw",
+    "s3.region": "eu-west-2",
+    "s3.part.size": "5242880",
+    "flush.size": "10000",
+    "rotate.interval.ms": "3600000",
+    "storage.class": "io.confluent.connect.s3.storage.S3Storage",
+    "format.class": "io.confluent.connect.s3.format.parquet.ParquetFormat",
+    "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
+    "partition.duration.ms": "3600000",
+    "path.format": "'year'=YYYY/'month'=MM/'day'=dd/'hour'=HH",
+    "locale": "en-GB",
+    "timezone": "UTC",
+    "key.converter": "io.confluent.connect.avro.AvroConverter",
+    "key.converter.schema.registry.url": "http://schema-registry:8081",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081"
+  }
+}
+```
+
+### Single Message Transforms (SMTs)
+
+SMTs apply lightweight per-record transformations within the connector pipeline — no need for a separate stream processing application.
+
+| SMT | Purpose | Example |
+|-----|---------|---------|
+| **InsertField** | Add fields to records | Add ingestion timestamp, static metadata |
+| **ReplaceField** | Rename, include, or exclude fields | Drop sensitive columns before sink |
+| **MaskField** | Mask field values | Mask PII fields (e.g., email, phone) |
+| **ExtractField** | Extract a field from a struct | Pull the `after` state from a Debezium envelope |
+| **TimestampConverter** | Convert timestamp formats | Unix epoch to ISO string |
+| **ValueToKey** | Set the record key from value fields | Use a business key for partitioning |
+| **RegexRouter** | Rename topics via regex | Route `cdc.orders.public.orders` to `orders-raw` |
+| **Filter** | Drop records matching a predicate | Filter test/internal records |
+| **HeaderFrom** | Copy value fields to headers | Route metadata without modifying the payload |
+
+```json
+{
+  "transforms": "extractState,addTimestamp,maskEmail",
+  "transforms.extractState.type": "io.debezium.transforms.ExtractNewRecordState",
+  "transforms.addTimestamp.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+  "transforms.addTimestamp.timestamp.field": "ingested_at",
+  "transforms.maskEmail.type": "org.apache.kafka.connect.transforms.MaskField$Value",
+  "transforms.maskEmail.fields": "email",
+  "transforms.maskEmail.replacement": "***@***.***"
+}
+```
+
+**Limitations of SMTs:** they operate on one record at a time. For joins, aggregations, or stateful processing, use [[Kafka Streams]] or a dedicated stream processor.
+
+### Dead-Letter Queues
+
+When a connector encounters a record it cannot process (deserialisation error, schema mismatch, sink write failure), a dead-letter queue (DLQ) captures the failed record instead of halting the connector.
+
+```json
+{
+  "errors.tolerance": "all",
+  "errors.deadletterqueue.topic.name": "dlq-s3-sink",
+  "errors.deadletterqueue.topic.replication.factor": 3,
+  "errors.deadletterqueue.context.headers.enable": true,
+  "errors.log.enable": true,
+  "errors.log.include.messages": true
+}
+```
+
+| Setting | Purpose |
+|---------|---------|
+| `errors.tolerance=all` | Continue processing after errors (default `none` = fail immediately) |
+| `errors.deadletterqueue.topic.name` | Topic to send failed records to |
+| `errors.deadletterqueue.context.headers.enable` | Attach error context (exception, stack trace) as record headers |
+| `errors.log.enable` | Log errors to the Connect worker log |
+
+**DLQ processing pattern:** a separate consumer group reads the DLQ topic, inspects errors, and either fixes and replays records or alerts the operations team.
+
+### Monitoring
+
+**JMX Metrics (built-in):**
+
+| Metric Group | Key Metrics |
+|-------------|-------------|
+| **Connector** | `connector-status`, `connector-type`, `connector-class` |
+| **Task** | `source-record-poll-rate`, `sink-record-send-rate`, `offset-commit-success-percentage` |
+| **Worker** | `connector-count`, `task-count`, `connector-startup-attempts-total` |
+| **Error** | `total-errors-logged`, `total-records-skipped`, `deadletterqueue-produce-requests` |
+
+**Prometheus integration:**
+
+```yaml
+# docker-compose excerpt for JMX exporter
+KAFKA_CONNECT_OPTS: >-
+  -javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent.jar=9404:/opt/jmx-exporter/connect.yml
+
+# Prometheus scrape config
+scrape_configs:
+  - job_name: kafka-connect
+    static_configs:
+      - targets: ["connect-worker-1:9404", "connect-worker-2:9404"]
+```
+
+**Key alerts to configure:**
+
+- Connector status changed to `FAILED` or `PAUSED`
+- Task status changed to `FAILED`
+- Consumer lag on Connect consumer group growing
+- DLQ topic receiving records (non-zero produce rate)
+- Offset commit failure rate above threshold
+
+### REST API Operations
+
+```bash
+# List all connectors
+GET /connectors
+
+# Get connector status
+GET /connectors/postgres-cdc-source/status
+
+# Create or update a connector
+PUT /connectors/postgres-cdc-source/config
+
+# Pause / resume / restart
+PUT /connectors/postgres-cdc-source/pause
+PUT /connectors/postgres-cdc-source/resume
+POST /connectors/postgres-cdc-source/restart
+
+# Restart a specific failed task
+POST /connectors/postgres-cdc-source/tasks/0/restart
+
+# Delete a connector
+DELETE /connectors/postgres-cdc-source
+```
+
+### Connect vs Custom Consumers
+
+| Aspect | Kafka Connect | Custom Consumer Application |
+|--------|--------------|---------------------------|
+| **Development effort** | Configuration only (JSON) | Full application code |
+| **Offset management** | Automatic (framework-managed) | Manual (commit strategies) |
+| **Fault tolerance** | Built-in (task redistribution) | Must implement yourself |
+| **Scaling** | Add workers + increase `tasks.max` | Add consumer instances |
+| **Schema evolution** | Handled by converters + Schema Registry | Must implement yourself |
+| **Transformations** | SMTs (limited to per-record) | Unlimited (joins, aggregations, state) |
+| **Monitoring** | Built-in JMX metrics | Must instrument yourself |
+| **Connector ecosystem** | 200+ pre-built connectors | Write from scratch |
+| **Flexibility** | Limited to connector capabilities | Complete control |
+| **When to use** | Standard integrations (DB→Kafka→S3) | Complex processing, custom protocols, non-standard systems |
+
+**Rule of thumb:** use Connect for standard data integration (the plumbing). Use custom consumers or stream processors for business logic that requires stateful processing, joins, or complex transformations

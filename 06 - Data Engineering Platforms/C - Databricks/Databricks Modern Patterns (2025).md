@@ -407,4 +407,246 @@ for job in w.jobs.list():
 
 ---
 
+## MLflow on Databricks
+
+[[Databricks & Delta Lake|Databricks]] provides a fully managed MLflow deployment integrated with [[#Unity Catalog Governance|Unity Catalog]]. This eliminates the need to self-host MLflow Tracking Server infrastructure.
+
+### Tracking Server and Experiment UI
+
+Every Databricks workspace includes a hosted MLflow Tracking Server. Experiments are first-class objects in the workspace, accessible from the sidebar. The Experiment UI surfaces:
+
+- **Run comparison** -- side-by-side metrics, parameters, and artefacts across runs
+- **Charts** -- automatic visualisation of metric trends across runs (loss curves, accuracy over epochs)
+- **Artefact browser** -- inspect logged models, plots, and custom files
+- **Search and filter** -- query runs by parameters, metrics, tags, or status
+
+Logging is automatic when using Databricks AutoML or manual via the MLflow API:
+
+```python
+import mlflow
+
+with mlflow.start_run():
+    mlflow.log_param("learning_rate", 0.01)
+    mlflow.log_metric("rmse", 0.87)
+    mlflow.sklearn.log_model(model, "model")
+```
+
+### Model Registry and Stages
+
+Unity Catalog Model Registry replaces the legacy workspace-level registry. Models are registered as three-level namespace objects (`catalog.schema.model_name`) with full governance:
+
+| Stage | Purpose |
+|-------|---------|
+| **None** | Initial registration, experimental |
+| **Champion** | Production-serving model (replaces legacy "Production" stage) |
+| **Challenger** | Candidate model under evaluation against the champion |
+| **Archived** | Retired model versions retained for audit |
+
+Transitions between stages can be gated by approval workflows. Each model version records lineage back to the training run, dataset, and code.
+
+### Model Serving Endpoints
+
+Databricks Model Serving deploys registered models as auto-scaling REST endpoints:
+
+- **Serverless compute** -- scales to zero when idle, scales out on demand
+- **GPU support** -- for deep learning and LLM inference
+- **Environment management** -- dependencies resolved from the logged model's `conda.yaml` or `requirements.txt`
+- **Authentication** -- integrated with workspace tokens and service principals
+
+```python
+from databricks.sdk import WorkspaceClient
+w = WorkspaceClient()
+
+endpoint = w.serving_endpoints.create(
+    name="fraud-detection-v2",
+    config={
+        "served_models": [{
+            "model_name": "ml_catalog.fraud.detector",
+            "model_version": "3",
+            "workload_size": "Small",
+            "scale_to_zero_enabled": True,
+        }]
+    }
+)
+```
+
+### A/B Testing with Traffic Splitting
+
+Model Serving supports traffic splitting across multiple model versions on a single endpoint:
+
+```python
+config = {
+    "served_models": [
+        {"model_name": "ml.prod.recommender", "model_version": "5",
+         "workload_size": "Small", "scale_to_zero_enabled": False},
+        {"model_name": "ml.prod.recommender", "model_version": "6",
+         "workload_size": "Small", "scale_to_zero_enabled": False},
+    ],
+    "traffic_config": {
+        "routes": [
+            {"served_model_name": "recommender-5", "traffic_percentage": 90},
+            {"served_model_name": "recommender-6", "traffic_percentage": 10},
+        ]
+    }
+}
+```
+
+Inference logs capture request/response pairs per model version, enabling offline analysis of A/B test results. Gradually shift traffic from champion to challenger as confidence grows.
+
+---
+
+## Databricks Feature Store
+
+The Feature Store provides a centralised repository for feature engineering, ensuring consistency between training and serving.
+
+### Feature Tables
+
+Feature tables are Delta tables registered in Unity Catalog with a designated primary key. They support:
+
+- **Time-series features** -- optional timestamp column for temporal joins
+- **Composite keys** -- multi-column primary keys (e.g. `customer_id` + `product_id`)
+- **Auto-documentation** -- descriptions, tags, and lineage tracked in UC
+
+```python
+from databricks.feature_engineering import FeatureEngineeringClient
+
+fe = FeatureEngineeringClient()
+
+fe.create_table(
+    name="ml_catalog.features.customer_features",
+    primary_keys=["customer_id"],
+    timestamp_keys=["feature_timestamp"],
+    df=customer_features_df,
+    description="Customer behavioural features computed daily",
+)
+```
+
+### Online and Offline Serving
+
+| Mode | Storage | Latency | Use Case |
+|------|---------|---------|----------|
+| **Offline** | Delta Lake | Seconds | Batch training, batch scoring |
+| **Online** | DynamoDB / Cosmos DB / Feature Serving | Milliseconds | Real-time model inference |
+
+Online stores are synchronised from the offline Delta tables via scheduled or triggered publish jobs. Feature Serving endpoints (serverless) can serve features directly without external online stores.
+
+### Point-in-Time Lookups
+
+For training data, point-in-time correctness prevents data leakage. The Feature Store performs temporal joins using the timestamp key, ensuring each training example only sees features that were available at that point in time:
+
+```python
+training_set = fe.create_training_set(
+    df=labels_df,
+    feature_lookups=[
+        FeatureLookup(
+            table_name="ml_catalog.features.customer_features",
+            lookup_key=["customer_id"],
+            timestamp_lookup_key=["event_timestamp"],
+        ),
+    ],
+    label="is_fraud",
+)
+training_df = training_set.load_df()
+```
+
+### Feature Engineering with Delta
+
+Feature pipelines are typically implemented as DLT pipelines or Databricks Workflows that write to feature tables. The medallion architecture maps naturally:
+
+- **Bronze** -- raw event data
+- **Silver** -- cleansed, deduplicated entities
+- **Gold / Feature** -- aggregated features (e.g. `avg_transaction_amount_30d`, `login_count_7d`)
+
+Feature tables benefit from Delta's ACID transactions, time travel, and schema evolution.
+
+---
+
+## AutoML
+
+Databricks AutoML automates the model development workflow for tabular data, producing transparent, editable code.
+
+### Supported Problem Types
+
+| Problem Type | Algorithms Explored | Output |
+|-------------|-------------------|--------|
+| **Classification** | Logistic regression, decision trees, random forest, XGBoost, LightGBM | Best model + notebook per trial |
+| **Regression** | Linear regression, decision trees, random forest, XGBoost, LightGBM | Best model + notebook per trial |
+| **Forecasting** | Prophet, ARIMA | Best model + notebook per trial |
+
+### Glass-Box Models
+
+AutoML generates complete, editable Python notebooks for every trial run. Engineers can:
+
+- Inspect the exact preprocessing, feature engineering, and hyperparameter choices
+- Modify the generated notebook and re-run with adjustments
+- Promote the notebook to a production pipeline
+
+This "glass-box" approach avoids the opacity of black-box AutoML systems. Every decision is visible and auditable.
+
+### Custom Metrics
+
+Beyond default metrics (F1, AUC, RMSE), AutoML supports custom evaluation metrics:
+
+```python
+from databricks import automl
+
+summary = automl.classify(
+    dataset=train_df,
+    target_col="churn",
+    primary_metric="f1",
+    timeout_minutes=30,
+    max_trials=50,
+)
+
+# Access best model
+best_model = summary.best_trial.model
+```
+
+Results are logged to an MLflow experiment with full tracking of parameters, metrics, and artefacts for every trial.
+
+---
+
+## Mosaic AI
+
+Mosaic AI extends the Databricks platform with generative AI capabilities.
+
+### Foundation Model APIs
+
+Databricks hosts curated open-source foundation models (DBRX, Llama, Mixtral) as pay-per-token endpoints:
+
+- **Provisioned throughput** -- dedicated capacity for production workloads with guaranteed latency
+- **Pay-per-token** -- shared capacity for development and experimentation
+- **External models** -- gateway to OpenAI, Anthropic, and other providers via a unified API, enabling governance and rate limiting through Databricks
+
+All requests are routed through the AI Gateway, which provides logging, access control, and cost tracking via Unity Catalog.
+
+### RAG with Vector Search
+
+Databricks Vector Search provides a managed vector database for retrieval-augmented generation (RAG) workflows:
+
+1. **Embedding** -- compute embeddings using Foundation Model APIs or custom models
+2. **Indexing** -- create a vector search index on a Delta table column (auto-sync keeps the index current)
+3. **Retrieval** -- query the index for semantically similar documents
+4. **Generation** -- pass retrieved context to an LLM for grounded responses
+
+```python
+from databricks.vector_search.client import VectorSearchClient
+
+vsc = VectorSearchClient()
+index = vsc.get_index(
+    endpoint_name="vector-search-endpoint",
+    index_name="ml_catalog.docs.knowledge_base_index",
+)
+
+results = index.similarity_search(
+    query_text="How do I configure auto-scaling?",
+    columns=["content", "doc_url"],
+    num_results=5,
+)
+```
+
+Vector Search integrates with the MLflow evaluation framework for measuring RAG quality (relevance, faithfulness, groundedness). The entire pipeline -- from document ingestion through chunking, embedding, indexing, and serving -- can be orchestrated as a Databricks Workflow.
+
+---
+
 **Related:** [[Databricks & Delta Lake]] | [[Delta Lake Operations & Patterns]] | [[Data Cataloguing & Discovery]] | [[Data Validation & Quality Frameworks]] | [[Terraform for Data Infrastructure]]

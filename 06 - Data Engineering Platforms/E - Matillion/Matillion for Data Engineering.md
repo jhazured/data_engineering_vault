@@ -298,4 +298,58 @@ ADF suits the Azure/Synapse ecosystem. Matillion is preferred with Snowflake or 
 
 ---
 
+---
+
+## Migration Patterns
+
+Migrating from Matillion to cloud-native alternatives typically involves replacing the visual ELT platform with a code-first transformation layer and dedicated ingestion tooling.
+
+### Migration Target: Matillion to dbt + Fivetran
+
+The primary migration path separates Matillion's combined E+L+T into specialised tools:
+
+| Matillion Capability | Cloud-Native Replacement |
+|---------------------|-------------------------|
+| Orchestration jobs (loading) | [[Data Ingestion Patterns\|Fivetran]], Airbyte, or native COPY INTO scripts |
+| Transformation jobs | [[Core dbt Fundamentals\|dbt]] models (SQL + Jinja) |
+| Shared jobs (reusable logic) | dbt macros and packages |
+| Environment variables | dbt profiles + target-specific variables |
+| Grid variable iteration | dbt Jinja loops or run-operations |
+| Scheduling | [[Apache Airflow Core Concepts\|Airflow]], Dagster, or dbt Cloud scheduler |
+| API extracts | Fivetran/Airbyte connectors or custom Python scripts |
+
+### Assessment Framework: What to Migrate First
+
+Score each Matillion job against migration readiness:
+
+| Criterion | Low Priority (1) | High Priority (5) |
+|-----------|-----------------|-------------------|
+| **Job type** | Orchestration with complex Python/API logic | Pure transformation jobs |
+| **SQL complexity** | Heavy use of SQL Script components | Standard components (Join, Filter, Aggregate) |
+| **Dependencies** | Many cross-job variable dependencies | Self-contained jobs |
+| **Change frequency** | Stable, rarely modified | Frequently updated by multiple developers |
+| **Git maturity** | Not version-controlled | Already in Git (DPC) |
+
+**Recommended migration order:**
+1. **Transformation jobs** -- most directly translatable to dbt models since Matillion already generates SQL
+2. **Shared jobs** -- convert to dbt macros, preserving reusability
+3. **Simple orchestration jobs** -- S3/database loads replaced by Fivetran connectors
+4. **Complex orchestration** -- API extracts, iterators, conditional logic migrated to Airflow DAGs or Python scripts
+5. **Scheduling and monitoring** -- replace built-in scheduler with Airflow or dbt Cloud
+
+### Coexistence Patterns
+
+- **Matillion loads, dbt transforms** -- retain Matillion orchestration jobs for extraction while dbt handles all downstream transformation. This is the most common intermediate state and can be a permanent architecture
+- **Shadow execution** -- run migrated dbt models alongside existing Matillion transformation jobs. Compare outputs in a reconciliation layer before decommissioning Matillion jobs
+- **API-triggered hybrid** -- use Matillion's REST API to trigger remaining Matillion jobs from Airflow, enabling a single orchestration layer during the transition period
+- **Gradual connector replacement** -- replace Matillion loading jobs one connector at a time with Fivetran. Matillion continues loading sources without Fivetran support
+
+### Common Pitfalls
+
+- **Losing generated SQL visibility** -- Matillion's task history shows the generated SQL for every component. Capture this SQL before migration as a reference for writing equivalent dbt models
+- **Grid variable complexity** -- Matillion's Iterator + Grid Variable pattern does not map directly to dbt. Use dbt run-operations with Jinja loops, or move iteration logic to Airflow
+- **Environment variable mapping** -- Matillion environments bundle warehouse, role, database, and schema together. In dbt, these are split across `profiles.yml` targets and environment variables. Map carefully to avoid cross-environment data leakage
+- **Component-level error handling** -- Matillion's per-component success/failure routing has no dbt equivalent. Implement error handling in the orchestrator (Airflow on_failure_callback) or dbt's on-run-end hooks
+- **Underestimating connector coverage** -- verify Fivetran/Airbyte support for every Matillion source connector. API Query components with custom pagination logic may need bespoke Python ingestion scripts
+
 *Last updated: 2026-03-15*

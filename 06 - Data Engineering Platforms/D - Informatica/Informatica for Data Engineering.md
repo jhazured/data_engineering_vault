@@ -322,3 +322,69 @@ DECODE(status, 'A','Active', 'I','Inactive', 'Unknown')
 ABORT('Critical error: missing key')      -- stop session
 ERROR('Row rejected: invalid code')       -- reject row to error table
 ```
+
+---
+
+## Migration Patterns
+
+Migrating from Informatica to cloud-native alternatives is a common modernisation initiative. This section covers assessment, execution, and coexistence strategies.
+
+### Migration Target: Informatica to dbt + Fivetran/Airbyte
+
+The most common cloud-native replacement separates Informatica's monolithic E+L+T into discrete components:
+
+| Informatica Capability | Cloud-Native Replacement |
+|----------------------|-------------------------|
+| Extract + Load (connectors) | [[Data Ingestion Patterns\|Fivetran]], Airbyte, or [[Databricks Modern Patterns (2025)#LakeFlow\|LakeFlow Connect]] |
+| Transformation (mappings) | [[Core dbt Fundamentals\|dbt]] models (SQL + Jinja) |
+| SCD Type 1/2 | [[dbt Incremental Loading Patterns\|dbt snapshots]] and incremental models |
+| Data quality (CDQ) | dbt tests, [[Data Validation & Quality Frameworks\|Great Expectations]], Soda |
+| Orchestration (workflows) | [[Apache Airflow Core Concepts\|Airflow]], Dagster, or dbt Cloud |
+| Catalogue / lineage (CDGC) | [[Data Cataloguing & Discovery\|Unity Catalog]], Atlan, DataHub |
+
+### Migration Target: Informatica to AWS Glue
+
+For AWS-centric organisations, AWS Glue replaces PowerCenter/IDMC:
+
+- **Glue Crawlers** replace Informatica source discovery and schema inference
+- **Glue ETL (PySpark)** replaces mapping logic with code-first transformations
+- **Glue Data Catalog** replaces CDGC for metadata management
+- **Step Functions** replaces workflow orchestration
+- CDC via **AWS DMS** replaces Informatica CDC connectors
+
+### Assessment Framework: What to Migrate First
+
+Prioritise migration candidates using a scoring matrix:
+
+| Criterion | Low Priority (1) | High Priority (5) |
+|-----------|-----------------|-------------------|
+| **Complexity** | Complex Java/stored proc logic | Simple SQL-translatable mappings |
+| **Business criticality** | Core regulatory pipeline | Non-critical reporting |
+| **Maintenance burden** | Stable, rarely changed | Frequently modified, fragile |
+| **Cloud readiness** | On-prem sources only | Sources already in cloud/SaaS |
+| **Team capability** | Team knows only Informatica | Team knows SQL/Python/dbt |
+
+**Recommended migration order:**
+1. **Quick wins** -- simple source-to-target loads (replace with Fivetran/Airbyte connectors)
+2. **SQL-heavy transformations** -- mappings that are predominantly Expression/Filter/Aggregator (rewrite as dbt models)
+3. **SCD pipelines** -- replace Update Strategy patterns with dbt snapshots
+4. **Complex orchestration** -- multi-workflow chains (migrate to Airflow DAGs)
+5. **Data quality** -- CDQ scorecards to dbt tests and Great Expectations suites
+6. **Legacy integrations** -- mainframe/SAP connectors (keep in Informatica or use specialist tools)
+
+### Coexistence Patterns
+
+Running old and new systems in parallel during migration:
+
+- **Shadow mode** -- run both Informatica and dbt pipelines, compare outputs in a reconciliation table. Differences trigger alerts before cutover
+- **Strangler fig** -- migrate one mapping at a time. Informatica workflow calls dbt via CLI/API for migrated steps; remaining steps stay in Informatica
+- **Dual-write** -- Fivetran loads to a new raw schema alongside Informatica's existing loads. dbt reads from the new schema; Informatica continues serving legacy consumers
+- **API bridge** -- use IDMC REST API to trigger remaining Informatica jobs from Airflow, maintaining a single orchestration layer during transition
+
+### Common Pitfalls
+
+- **Underestimating mapping variables** -- Informatica's `$$VAR` / `SETVARIABLE` state persistence has no direct dbt equivalent. Implement via dbt run-operations writing to a state table
+- **Ignoring pushdown differences** -- Informatica's Expression language is not SQL. Functions like `DECODE`, `IIF`, `REG_REPLACE` need translation to target SQL dialect
+- **Skipping reconciliation** -- always run parallel comparison for at least two full data cycles before decommissioning
+- **Forgetting parameter files** -- Informatica parameter files encode environment-specific configuration. Map these to dbt profiles, environment variables, or Airflow variables
+- **Connector coverage gaps** -- verify Fivetran/Airbyte support for every source before committing. Mainframe, SAP, and legacy ODBC sources may require specialist connectors or middleware

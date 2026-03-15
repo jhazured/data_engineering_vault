@@ -322,6 +322,74 @@ Dataiku's plugin ecosystem extends the platform with custom dataset types (conne
 
 ---
 
+---
+
+## Migration Patterns
+
+Migrating from Dataiku to cloud-native alternatives typically involves replacing the unified platform with specialised tools for each capability layer.
+
+### Migration Target: Dataiku to Databricks + MLflow
+
+The primary migration path leverages the [[Databricks Modern Patterns (2025)|Databricks]] ecosystem:
+
+| Dataiku Capability | Cloud-Native Replacement |
+|-------------------|-------------------------|
+| Visual recipes (Prepare, Join, Group By) | [[Core dbt Fundamentals\|dbt]] models or Spark SQL in notebooks |
+| Code recipes (Python/PySpark) | Databricks notebooks or [[Databricks Modern Patterns (2025)#DLT DevOps Best Practices\|DLT pipelines]] |
+| AutoML / Visual ML | [[Databricks Modern Patterns (2025)#AutoML\|Databricks AutoML]] |
+| Model registry / deployment | [[Databricks Modern Patterns (2025)#MLflow on Databricks\|MLflow Model Registry]] + Model Serving |
+| Scenarios (orchestration) | [[Apache Airflow Core Concepts\|Airflow]] DAGs or Databricks Workflows |
+| Data catalogue / governance | [[Databricks Modern Patterns (2025)#Unity Catalog Governance\|Unity Catalog]] |
+| Feature engineering | [[Databricks Modern Patterns (2025)#Databricks Feature Store\|Databricks Feature Store]] |
+| Bundles (CI/CD) | Databricks Asset Bundles + Git integration |
+| Model monitoring | Lakehouse Monitoring |
+
+### Alternative Target: Dataiku to dbt + Snowflake + SageMaker
+
+For organisations not on Databricks:
+
+- **dbt** replaces visual and SQL recipes for transformation
+- **Snowflake** remains the compute engine (Dataiku was already pushing down to it)
+- **SageMaker / Vertex AI** replaces AutoML and model serving
+- **MLflow** (self-hosted or managed) replaces the model registry
+- **Airflow** replaces scenarios for orchestration
+
+### Assessment Framework: What to Migrate First
+
+| Criterion | Low Priority (1) | High Priority (5) |
+|-----------|-----------------|-------------------|
+| **Recipe type** | Complex Python with Dataiku API calls | Visual recipes / SQL recipes |
+| **ML dependency** | Deep AutoML with custom plugins | No ML, pure data engineering |
+| **Governance usage** | Heavy use of Govern Node approvals | Minimal governance features |
+| **Compute delegation** | Local engine processing | Already pushdown to Snowflake/Spark |
+| **Team readiness** | Analysts reliant on visual interface | Engineers comfortable with code |
+
+**Recommended migration order:**
+1. **SQL pushdown recipes** -- already executing SQL in the warehouse; extract and convert to dbt models
+2. **PySpark code recipes** -- move directly to Databricks notebooks or DLT pipelines
+3. **Data loading (Sync recipes)** -- replace with Fivetran, Airbyte, or LakeFlow Connect
+4. **ML pipelines** -- retrain models in Databricks AutoML or MLflow, deploy to Model Serving
+5. **Scenarios** -- convert to Airflow DAGs or Databricks Workflows
+6. **Governance workflows** -- implement approval gates in CI/CD pipelines or Unity Catalog policies
+7. **Visual recipes used by analysts** -- provide dbt training or maintain a simplified Dataiku instance for non-technical users
+
+### Coexistence Patterns
+
+- **Dataiku on Databricks** -- use Dataiku as the orchestration and governance layer while Databricks provides the compute engine. This is a valid long-term architecture, not just a transition state
+- **Shadow scoring** -- deploy migrated MLflow models alongside Dataiku models. Compare predictions on the same input data before switching production traffic
+- **Gradual recipe migration** -- convert one recipe at a time from Dataiku visual/code to dbt/notebooks. Dataiku can read from tables produced by external tools, enabling incremental migration within the same flow
+- **Dual orchestration** -- run Dataiku scenarios and Airflow DAGs in parallel during transition. Use Airflow to trigger Dataiku scenarios via API for jobs not yet migrated
+
+### Common Pitfalls
+
+- **Losing visual lineage** -- Dataiku's flow provides immediate, visual lineage that is difficult to replicate. Ensure dbt docs, Unity Catalog lineage, or a data catalogue tool is in place before decommissioning
+- **Underestimating the Prepare recipe** -- a single Prepare recipe can contain dozens of processors. Each must be individually translated to SQL or Python transformations
+- **Plugin dependencies** -- custom Dataiku plugins (connectors, recipes, algorithms) have no equivalent outside the platform. Identify and replace each plugin's functionality
+- **Bundle/promotion workflow** -- Dataiku's design-to-automation bundle promotion is tightly integrated. Replicate with Databricks Asset Bundles, dbt Cloud environments, or CI/CD pipelines
+- **Mixed-skill team impact** -- Dataiku's value is accessibility for non-technical users. Migration to code-first tools may exclude analysts unless training or alternative tooling (e.g. Hex, Lightdash) is provided
+
+---
+
 **Related Notes**: [[Databricks & Delta Lake]] | [[Core dbt Fundamentals]] | [[Apache Airflow Core Concepts]] | [[Python Core Patterns for Data Engineering]] | [[Snowflake Architecture & Key Concepts]]
 
 **Tags**: #dataiku #data-engineering #mlops #platform #no-code
