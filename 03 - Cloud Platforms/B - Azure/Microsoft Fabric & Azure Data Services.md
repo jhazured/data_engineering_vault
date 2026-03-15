@@ -236,6 +236,129 @@ FROM t3.dim_employee_FINAL;
 
 ---
 
+## 6b. Batch Processing with Pagination & Hash Merge
+
+A production pattern for REST API sources where the API does not return total page count and the source `updated_at` timestamp cannot be trusted for SCD2 change detection. Implemented entirely in T-SQL (Warehouse SQL scripts, not notebooks).
+
+### Problem
+
+1. **Unreliable pagination** — the source API does not return `total_pages` or `total_records` in its response. The only signal that you have reached the end is when the payload returns fewer records than the requested page size (or an empty set).
+2. **Untrusted timestamps** — the source system's `updated_at` column is unreliable (backdated, missing, or overwritten). You cannot use watermark-based incremental loading to detect changes.
+
+### Solution: Payload-Size Pagination + Hash Merge
+
+**Step 1 — Paginated Ingestion (Data Factory)**
+
+Use a Data Factory pipeline with an `Until` loop that reads pages until the payload is smaller than the page size:
+
+```
+PL_T1_Ingest_[Entity]
+  |-- Set variable: @page = 1, @hasMore = true
+  |-- Until: @hasMore = false
+  |   |-- Web activity: GET /api/entity?page=@page&page_size=500
+  |   |-- If: length(output.value) < 500
+  |   |   |-- Set @hasMore = false
+  |   |-- Copy activity: append response to T1 Lakehouse (VARIANT)
+  |   |-- Set variable: @page = @page + 1
+```
+
+Key design decisions:
+- **Page size** — match the source API's maximum (e.g. 500). Larger pages = fewer API calls.
+- **Empty set guard** — also check `length(output.value) = 0` for APIs that return exact multiples.
+- **Rate limiting** — add a `Wait` activity (e.g. 1 second) between iterations if the API throttles.
+- **Idempotency** — truncate the T1 staging table before each full extraction run. The full dataset is re-ingested each time because watermarks are unreliable.
+
+**Step 2 — Hash Column Generation (Warehouse SQL Script)**
+
+Since `updated_at` cannot be trusted, generate a deterministic hash of all business columns to detect actual data changes:
+
+```sql
+-- Create a staging view with hash over T1 data
+CREATE OR ALTER VIEW t2.vw_staging_entity AS
+SELECT
+    entity_id,
+    col_a,
+    col_b,
+    col_c,
+    HASHBYTES('SHA2_256',
+        CONCAT_WS('|',
+            ISNULL(CAST(col_a AS NVARCHAR(MAX)), ''),
+            ISNULL(CAST(col_b AS NVARCHAR(MAX)), ''),
+            ISNULL(CAST(col_c AS NVARCHAR(MAX)), '')
+        )
+    ) AS row_hash
+FROM t1_entity;
+```
+
+**Step 3 — Hash Merge SCD2 (Warehouse Stored Procedure)**
+
+Compare hash values instead of individual columns or timestamps:
+
+```sql
+CREATE PROCEDURE t2.usp_hash_merge_dim_entity AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Step 1: Expire records where hash has changed
+    UPDATE t2.dim_entity
+    SET expiry_date = GETDATE(),
+        is_current = 0
+    WHERE is_current = 1
+      AND entity_id IN (
+          SELECT s.entity_id
+          FROM t2.vw_staging_entity s
+          JOIN t2.dim_entity t
+            ON s.entity_id = t.entity_id
+           AND t.is_current = 1
+          WHERE s.row_hash <> t.row_hash
+      );
+
+    -- Step 2: Insert new versions (changed + genuinely new)
+    INSERT INTO t2.dim_entity (
+        entity_id, col_a, col_b, col_c,
+        row_hash, effective_date, expiry_date, is_current
+    )
+    SELECT
+        s.entity_id, s.col_a, s.col_b, s.col_c,
+        s.row_hash, GETDATE(), NULL, 1
+    FROM t2.vw_staging_entity s
+    WHERE NOT EXISTS (
+        SELECT 1 FROM t2.dim_entity t
+        WHERE t.entity_id = s.entity_id
+          AND t.is_current = 1
+          AND t.row_hash = s.row_hash
+    );
+
+    -- Step 3: Log to T0
+    INSERT INTO t0.pipeline_log (procedure_name, rows_expired, rows_inserted, executed_at)
+    SELECT 'usp_hash_merge_dim_entity', @@ROWCOUNT, @@ROWCOUNT, GETDATE();
+END;
+```
+
+### Why Hash Merge
+
+| Approach | When to Use | When to Avoid |
+|----------|-------------|---------------|
+| **Watermark** (`updated_at > @last_run`) | Source timestamps are reliable | Timestamps are backdated or missing |
+| **Column-by-column compare** | Few columns, simple types | Many columns (verbose SQL, maintenance burden) |
+| **Hash merge** | Untrusted timestamps, many columns | Very high row counts where hash compute is expensive |
+
+Hash merge advantages:
+- **Single comparison** — one `WHERE s.row_hash <> t.row_hash` replaces N column comparisons
+- **Immune to timestamp manipulation** — detects actual data changes regardless of what `updated_at` says
+- **Maintainable** — adding a new column means updating the hash definition in one place (the staging view)
+
+### Why Payload-Size Pagination
+
+| Signal | Reliable? | Notes |
+|--------|-----------|-------|
+| `total_pages` header | Yes, if provided | Preferred — use `ForEach` with range. Not always available. |
+| `next_page` link | Yes, if provided | Follow links until null. Common in well-designed APIs. |
+| **Payload size < page_size** | Always works | Universal fallback. Only signal available when API returns no metadata. |
+| Empty response body | Always works | Final guard — catch exact multiples of page_size. |
+
+---
+
 ## 7. Delta Lake on Fabric
 
 Both the Lakehouse (Spark) and Warehouse (T-SQL) store data as Delta Lake tables backed by Parquet files in OneLake. The aged-care-lakehouse project demonstrates PySpark-based Delta patterns.
