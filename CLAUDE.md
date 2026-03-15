@@ -4,23 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-This is an Obsidian knowledge vault — a personal reference library for data engineering topics. It is **not** a software project. There is no build system, test suite, or application code. The content is ~113 markdown files organized into numbered topic folders.
+This is an Obsidian knowledge vault — a personal reference library for data engineering topics. It is **not** a software project. There is no build system, test suite, or application code. The content is ~137 markdown files (~90,000 lines) organised into numbered topic folders.
 
 ## Vault Structure
 
-Notes are organized by numbered prefix into domain areas:
+Notes are organised by numbered prefix into domain areas:
 
-- **01 - Active Projects** — workspace for current initiatives (vault audit, coverage report)
-- **02 - Templates** — ETL pipeline templates, common DE patterns (12 reusable patterns), reference architectures (AWS/Snowflake/dbt)
-- **03 - Cloud Platforms** — AWS, Azure/Microsoft Fabric (incl. ADF patterns), GCP
-- **04 - Data Engineering** — core DE topics: ingestion (3), storage (incl. Hadoop/MapReduce), transformation (incl. data contracts, data mesh), testing & quality (2), monitoring (2), security (incl. trust stores), cataloguing
-- **05 - Data Streaming** — pub/sub, Kafka, event-driven architecture
-- **06 - Data Engineering Platforms** — dbt (5), Snowflake (4), Databricks (3 incl. modern 2025 patterns), Informatica, Matillion, Dataiku, DuckDB
-- **07 - Programming Languages** — Bash (1), PySpark (26 incl. Spark architecture + Delta Lake + cloud integration), Python (6 incl. pandas/Polars, Streamlit), SQL (8 incl. Snowflake pipeline patterns)
-- **08 - DevOps & Orchestration** — Ansible, Docker (2), Kubernetes, Jenkins, Terraform, API management/MCP, CI/CD (3), Airflow (2 incl. deep dive)
-- **09 - Data Modelling** — Kimball, Data Vault 2.0, star schema implementation, data flow diagrams, sequence diagrams
-- **10 - Protocols** — REST, SOAP, SFTP, gRPC & GraphQL
-- **11 - Learning Resources** — interview guides (6 incl. AWS DEA, Databricks), DP-600 study guide, best practices, cheat sheets
+- **01 - Active Projects** — vault coverage report with heatmap, section ratings, project tree, and 10/10 roadmap
+- **02 - Templates** — common DE patterns (12 reusable patterns), ETL pipeline templates, reference architectures (AWS, Azure Fabric)
+- **03 - Cloud Platforms** — AWS (services + project patterns), Azure/Microsoft Fabric (T0-T5 + ADF + hash merge), GCP (BigQuery ETL + Composer + Dataflow/Beam), multi-cloud comparison
+- **04 - Data Engineering** — ingestion (3), storage (Hadoop, distributed systems, Iceberg/Hudi deep dive), transformation (data contracts, data mesh, SCD2), testing (quality frameworks + profiling), monitoring (observability + cost + reliability + SLOs), security (RBAC, cross-platform IAM, compliance/GDPR/SOC2/HIPAA, masking, trust stores), cataloguing, lifecycle, analytical SQL patterns
+- **05 - Data Streaming** — Kafka (+ Schema Registry + Connect + exactly-once), stream processing theory, event-driven architecture, Snowflake Streams, Flink & Kinesis, GCP Pub/Sub
+- **06 - Data Engineering Platforms** — dbt (5 + dbt Cloud), Snowflake (4 + cost monitoring), Databricks (3 + MLflow/AutoML), Fivetran, DuckDB (+ recipes), Informatica, Matillion, Dataiku (all with migration patterns)
+- **07 - Programming Languages** — Bash (deployment + scripting fundamentals, 1,487 lines), PySpark (30 files incl. Spark architecture, MLlib, GraphFrames, Security & Governance, MLOps), Python (6 incl. async, packaging), SQL (8 incl. LATERAL FLATTEN, QUALIFY, JSON, execution plans)
+- **08 - DevOps & Orchestration** — Ansible, Docker (2 + Spark-on-K8s), Jenkins, Terraform (+ Snowflake/Databricks providers), API management (gateway patterns, Postman, MCP), CI/CD (3 + advanced blue/green), Orchestration (Airflow deep dive, Dagster & Prefect)
+- **09 - Data Modelling** — Kimball, advanced dimensional (junk/factless/bridge/mini + Inmon + lakehouse-era), Data Vault 2.0, star schema, DFD (+ domain examples), sequence diagrams (+ error handling flows)
+- **10 - Protocols** — REST (+ webhooks + API versioning), SOAP, SFTP (comprehensive), gRPC & GraphQL, WebSocket & SSE
+- **11 - Learning Resources** — interview guides (7 incl. system design), DP-600 study guide, best practices (per-domain), cheat sheets (per-tool), troubleshooting runbooks
 
 ## Obsidian Plugins
 
@@ -32,17 +32,20 @@ Notes are organized by numbered prefix into domain areas:
 
 - Folders use numbered prefixes (`01 -`, `02 -`, etc.) for ordering; subfolders use letter prefixes (`A -`, `B -`, etc.)
 - Each leaf folder typically contains one or a few markdown files on that topic
-- PySpark is the most developed section with 12 subsections covering core concepts through production patterns
+- PySpark is the most developed section with 30 files across 12 subsections
 - The vault setting `alwaysUpdateLinks` is enabled — Obsidian auto-updates internal links when files are moved/renamed
+- British English throughout (`Modelling`, `Optimisation`, `Cataloguing`, `Serialisation`)
 
-## Current Priorities
+## Current State
 
-See `01 - Active Projects/Vault Coverage Report.md` for the full prioritised gap analysis, per-folder assessment, and recommended next steps.
+See `01 - Active Projects/Vault Coverage Report.md` for the full coverage heatmap, section ratings (7.9/10 average), project tree, and roadmap.
 
-### Remaining Gaps (as of 2026-03-15)
+### Vault Metrics
 
-- **PySpark Security/Governance, MLOps, GraphFrames** — subfolders scaffolded but empty
-- **Iceberg / Hudi** — open table formats beyond Delta Lake (brief coverage in existing note)
+- **137 notes | 90,656 lines | 11 topic areas**
+- **Vault Average: 7.9/10** across all sections
+- No empty critical folders
+- All major DE domains covered
 
 ### Workspace Projects (source material)
 
@@ -50,14 +53,14 @@ These projects at `/home/jhark/workspace/` have been reviewed and extracted into
 
 | Project | Content Extracted |
 |---------|-------------------|
-| `gcp_datamigration` | GCP, Ansible, Jenkins, Docker, Python, Bash, ETL templates, observability, data quality |
-| `gcp_infra_terraform` | Terraform modules (networking, compute, storage, IAM, monitoring) |
-| `fabric-aged-care-lakehouse` | Microsoft Fabric, Delta Lake, SCD2, medallion architecture |
+| `gcp_etl_framework` | BigQuery ETL, Cloud SQL, GCS extraction, transformation patterns |
+| `gcp_infra_terraform` | Terraform modules, GCP IAM, Cloud Monitoring dashboards |
+| `fabric-aged-care-lakehouse` | Microsoft Fabric, Delta Lake, SCD2, medallion, RLS patterns |
 | `databricks-delta-lake-project` | Databricks platform, quality scoring, K8s manifests, Terraform |
-| `data-engineering-wiki` | Microsoft Fabric T0-T5, DP-600 study guide, star schema, ADRs |
-| `logistics-analytics-platform` | dbt advanced patterns, Fivetran cost optimisation, ML features |
+| `data-engineering-wiki` | Microsoft Fabric T0-T5, DP-600 study guide, star schema, security patterns |
+| `logistics-analytics-platform` | dbt patterns, Fivetran, Snowflake cost/streaming/RBAC, data lineage, macros |
 | `US-flights-data-pipeline` | Snowflake JS stored procs, star schema DDL, incremental loading |
-| `data-engineering-books` | RAG architecture reference (already covered in vault) |
+| `data-engineering-books` | Spark, Hadoop, Kafka, DDIA, Kimball, Airflow, Databricks (2025), AWS DEA |
 
 ## Working With This Vault
 
@@ -65,3 +68,4 @@ These projects at `/home/jhark/workspace/` have been reviewed and extracted into
 - Use Obsidian-compatible markdown: `[[wikilinks]]` for internal links, standard markdown for everything else
 - Place new notes in the appropriate topic folder; create new lettered subfolders if a new subtopic is needed
 - The `01 - Active Projects` folder is reserved for current work-in-progress notes
+- Run `make bundle` to generate a `review_bundle.txt` for sharing/review (if Makefile exists)

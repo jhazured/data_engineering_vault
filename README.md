@@ -2,7 +2,7 @@
 
 A personal knowledge base for data engineering — built in [Obsidian](https://obsidian.md), covering cloud platforms, data pipelines, programming, DevOps, data modelling, and interview prep.
 
-**130+ notes | 85,000+ lines | 11 topic areas**
+**137 notes | 90,000+ lines | 11 topic areas**
 
 ---
 
