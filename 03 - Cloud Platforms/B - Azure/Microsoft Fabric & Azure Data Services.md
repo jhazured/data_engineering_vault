@@ -98,7 +98,7 @@ Each step depends on the previous step succeeding. Independent tables within a s
 
 ### Control Table-Driven Pipeline Orchestration
 
-For multi-table pipelines, a metadata-driven control table eliminates per-table pipeline code. One row per table drives runtime behaviour:
+For multi-table pipelines, a metadata-driven control table eliminates per-table pipeline code. One row per table drives runtime behaviour — adding a new source table requires only an INSERT, no pipeline changes.
 
 ```sql
 CREATE TABLE control.pipeline_control (
@@ -106,6 +106,7 @@ CREATE TABLE control.pipeline_control (
     table_name          VARCHAR(100)    NOT NULL,   -- target table in T1/T2
     src_table_name      VARCHAR(100)    NULL,       -- source API table name (if different)
     load_type           VARCHAR(20)     NOT NULL,   -- 'snapshot', 'incremental', 'windowed'
+    merge_type          VARCHAR(20)     NULL,       -- 'snapshot' or 'incremental' (drives T2 SP selection)
     watermark_column    VARCHAR(100)    NULL,       -- filter field (NULL for snapshot)
     primary_key_column  VARCHAR(500)    NULL,       -- PK for SCD2 joins
     last_watermark_ts   DATETIME2(6)    NOT NULL,   -- last successful watermark
@@ -113,42 +114,221 @@ CREATE TABLE control.pipeline_control (
     page_size           INT             NOT NULL,   -- API pagination $top
     do_not_load         INT             NOT NULL,   -- short-term failure flag
     is_active           INT             NOT NULL,   -- long-term enable/disable
-    column_mapping_json VARCHAR(MAX)    NULL,       -- column mapping + hash source
-    rolling_days        INT             NULL,       -- windowed tables only
-    api_query_suffix    VARCHAR(MAX)    NULL,       -- per-table API query override
-    CONSTRAINT PK_pipeline_control PRIMARY KEY NONCLUSTERED (pipeline_name, table_name) NOT ENFORCED
+    schema_name         VARCHAR(100)    NULL,       -- target schema (e.g. 'source_schema')
+    raw_warehouse       VARCHAR(200)    NULL,       -- T1 warehouse name
+    persistent_warehouse VARCHAR(200)   NULL,       -- T2 warehouse name
+    column_mapping_json VARCHAR(MAX)    NULL,       -- column mapping for Copy activity + hash source
+    rolling_days        INT             NULL,       -- windowed tables only (e.g. 90 for BAU)
+    api_query_suffix    VARCHAR(MAX)    NULL        -- per-table API query override
 );
 ```
+
+**Key columns explained:**
+
+| Column | Purpose |
+|--------|---------|
+| `load_type` | Determines which T1 parent pipeline runs this table: `snapshot`, `windowed`, or `incremental` |
+| `merge_type` | Determines which T2 stored procedure runs: `snapshot` (includes soft deletes) or `incremental` (no soft deletes) |
+| `rolling_days` | For windowed loads — how far back to look (90 days for BAU, 3650 for initial history load) |
+| `column_mapping_json` | JSON translator passed to Copy activity — maps source columns to target columns |
+| `raw_warehouse` / `persistent_warehouse` | Cross-warehouse references passed to SCD2 SPs as parameters |
 
 **Two-flag pattern for failure handling:**
 
 | Flag | Set When | Reset When | Purpose |
 |------|----------|------------|---------|
 | `do_not_load` | T1 transient failure | **Auto-reset to 0 at start of every run** | Prevents T2 from running after failed T1. Auto-recovers next run. |
-| `is_active` | Manual — table excluded | Manual — table re-enabled | Long-term disable. Never auto-reset. |
+| `is_active` | Manual — or auto-set to 0 on schema errors | Manual — table re-enabled | Long-term disable. Never auto-reset. |
 
 This separates transient failures (auto-recover) from intentional exclusions (manual control). The `do_not_load` flag is reset at the start of every run via a `script_begin_run` step — if the error is persistent, it will be set back to 1 at the end of that failed run.
 
-**Three load patterns from one pipeline set:**
+**Smart `is_active` auto-disable:** The child pipeline inspects error messages for schema-breaking errors (column mapping failures, sink column not found) and auto-sets `is_active = 0` to prevent the table from retrying on every scheduled run until a human investigates:
 
 ```
-pl_master_{pattern}
-    ↓ generates job_id for run correlation
-pl_parent_{pattern}_transient    ← ForEach: reads control table, filters by load_type + is_active
-    ↓ passes all table parameters
-pl_child_{pattern}_transient     ← actual ingestion (pagination Until loop)
-    ↓ on success
-pl_parent_{pattern}_persistent   ← ForEach: filters do_not_load=0
+-- Pseudo-logic in the failure handler:
+SET is_active = CASE
+    WHEN error LIKE '%DWCopyTargetColumn%'
+      OR error LIKE '%columnmapping%'
+      OR error LIKE '%cannotinfersink%'
+      OR error LIKE '%not found in datawarehouse%'
+      OR error LIKE '%schema%'
+    THEN 0          -- deactivate: needs human intervention
+    ELSE is_active  -- keep active: transient error, will retry
+END
+```
+
+### Master / Parent / Child Pipeline Hierarchy
+
+The pipeline architecture uses three levels of nesting to separate orchestration from execution:
+
+```
+pl_master_{source}                         ← sets job_id = @pipeline().RunId
+  ├→ exec_T1_snapshot                     ← sequential tier execution
+  │   └→ pl_T1_{source}_snapshot_parent    ← Lookup control table, ForEach table
+  │       └→ pl_T1_{source}_snapshot_child ← per-table: truncate → paginate → copy → log
+  ├→ exec_T1_windowed
+  │   └→ pl_T1_{source}_windowed_parent
+  │       └→ pl_T1_{source}_windowed_child
+  ├→ exec_T1_incremental
+  │   └→ pl_T1_{source}_incremental_parent
+  │       └→ pl_T1_{source}_incremental_child
+  ├→ exec_T2
+  │   └→ pl_T2_{source}_parent            ← Lookup all active tables (any load_type)
+  │       └→ pl_T2_{source}_child          ← routes to correct SCD2 SP by merge_type
+  ├→ exec_T3
+  │   └→ pl_T3_{source}_parent            ← runs integration SPs sequentially
+  └→ exec_T4
+      └→ pl_T4_{source}_parent            ← loads dims then facts with audit logging
+```
+
+**Design principles:**
+- **Master** sets `job_id` once (from `@pipeline().RunId`) and passes it to every tier — enables end-to-end audit correlation
+- **Parents** read the control table via Lookup activity and iterate with ForEach — no hardcoded table lists
+- **Children** do the actual work — each child is a self-contained unit with its own error handling, logging, and email alerts
+- Tiers execute **sequentially** (T1 → T2 → T3 → T4) because each tier depends on the previous tier's output
+- Within T1, load patterns execute sequentially (snapshot → windowed → incremental) to avoid API rate limit conflicts
+
+### Parent Pipeline Pattern (Lookup + ForEach)
+
+Every parent pipeline follows the same structure:
+
+```
+[Lookup: lk_get_active_tables]
+    ↓ (query: SELECT ... FROM control.pipeline_control
+    ↓          WHERE pipeline_name = @p_pipeline_name
+    ↓            AND is_active = 1 AND do_not_load = 0
+    ↓            AND load_type = '{pattern}'   ← T1 parents filter by load_type
+    ↓          ORDER BY table_name)            ← T2 parent omits load_type filter
     ↓
-pl_child_{pattern}_persistent    ← SCD2 merge T1 → T2
+[ForEach: foreach_table]  (isSequential: true)
+    ↓ passes all columns from control table row as parameters
+    └→ [ExecutePipeline: exec_child]
+        parameters:
+          p_job_id              ← from master
+          p_pipeline_name       ← from control table row
+          p_table_name          ← from control table row
+          p_schema_name         ← from control table row
+          p_page_size           ← from control table row (T1 only)
+          p_primary_key_column  ← from control table row (T2 only)
+          p_merge_type          ← from control table row (T2 only)
+          p_raw_warehouse       ← from control table row (T2 only)
+          p_persistent_warehouse ← from control table row (T2 only)
+          ...
 ```
 
-**Per-table API overrides via `api_query_suffix`:** For source APIs with per-table quirks (e.g. column restrictions, custom filters), store the override in the control table rather than branching pipeline logic. The suffix is appended to the API URL before pagination parameters:
+The parent also has failure branches — if the Lookup fails (control table unreachable) or the ForEach fails (all children failed), it logs to `audit.pipeline_run_log` with `table_name = 'ALL'`.
+
+### T1 Child Pipeline Pattern (Truncate → Paginate → Log)
+
+Each T1 child pipeline handles one table end-to-end:
 
 ```
-URL without suffix: GET /table/{src_table_name}?$top={page_size}&$skip={offset}
-URL with suffix:    GET /table/{src_table_name}{api_query_suffix}&$top={page_size}&$skip={offset}
+[script_begin_run]           ← SET last_run_status = 'RUNNING', INSERT audit log
+    ↓
+[script_truncate_t1]         ← TRUNCATE TABLE [schema].[table]
+    ↓ on failure → log FAILED + email alert + Fail activity
+    ↓ on success
+[until_paginate_api]         ← Until: v_row_count < p_page_size
+    │  [copy_api_to_t1]      ← Copy from REST API → Warehouse (retry: 3)
+    │  [setvar_row_count]     ← capture @@rowsCopied
+    │  [setvar_offset += page_size]
+    ↓ on failure → log FAILED + set do_not_load=1 + email alert
+    ↓ on success
+[script_log_success]         ← SET last_run_status = 'SUCCESS', UPDATE audit rows_loaded
 ```
+
+**Pagination variables** use a temp-variable swap pattern because Fabric pipelines cannot self-assign a variable (e.g., `v_offset = v_offset + page_size` is not allowed). Instead:
+
+```
+v_offset_temp = v_offset + p_page_size    ← calculate into temp
+v_offset      = v_offset_temp             ← swap back
+```
+
+Same pattern applies for `v_total_rows` accumulation.
+
+### T2 Child Pipeline Pattern (SP Routing by merge_type)
+
+The T2 child pipeline selects which SCD2 stored procedure to call based on the `merge_type` parameter from the control table:
+
+```
+-- Dynamic SP selection via pipeline expression:
+EXEC [{schema}].[
+    @if(equals(pipeline().parameters.p_merge_type, 'snapshot'),
+        'usp_scd2_merge_snapshot',
+        'usp_scd2_merge')
+]
+    @schema    = '{p_schema_name}',
+    @table     = '{p_table_name}',
+    @pk        = '{p_primary_key_column}',
+    @raw_wh    = '{p_raw_warehouse}',
+    @pers_wh   = '{p_persistent_warehouse}',
+    @ctrl_wh   = 'T0_control',
+    @job_id    = '{p_job_id}',
+    @pipe_name = '{p_pipeline_name}';
+```
+
+| `merge_type` | SP Called | Behaviour |
+|-------------|-----------|-----------|
+| `snapshot` | `usp_scd2_merge_snapshot` | Soft-delete absent rows → expire changed → insert new |
+| `incremental` | `usp_scd2_merge` | Expire changed → insert new (no soft deletes) |
+
+See [[SCD Type 2 Patterns#Microsoft Fabric T-SQL SCD2 (Warehouse Pattern)]] for the full SP implementations.
+
+### Audit Logging with Job ID Correlation
+
+Every pipeline step logs to a central audit table with the master pipeline's `job_id`:
+
+```sql
+CREATE TABLE audit.pipeline_run_log (
+    log_id          BIGINT IDENTITY NOT NULL,
+    job_id          VARCHAR(100)    NOT NULL,   -- master pipeline RunId
+    pipeline_name   VARCHAR(100)    NOT NULL,
+    table_name      VARCHAR(100)    NOT NULL,
+    load_layer      VARCHAR(20)     NOT NULL,   -- transient, persistent_begin,
+                                                -- persistent_delete, persistent_expire,
+                                                -- persistent_insert, presentation
+    rows_loaded     INT             NULL,
+    run_status      VARCHAR(20)     NOT NULL,   -- RUNNING, SUCCESS, FAILED
+    error_message   VARCHAR(MAX)    NULL,
+    start_time      DATETIME2(6)    NULL,
+    loaded_at       DATETIME2(0)    NOT NULL
+);
+```
+
+**Audit lifecycle for one table in one run:**
+
+```
+1. T1 child starts     → INSERT (load_layer='transient', status='RUNNING')
+2. T1 child succeeds   → UPDATE (status='SUCCESS', rows_loaded=N)
+   T1 child fails      → UPDATE (status='FAILED', error_message=...)
+3. T2 child starts     → INSERT (load_layer='persistent_begin', status='RUNNING')
+4. T2 SP executes      → INSERT (load_layer='persistent_delete', rows=N)   ← snapshot only
+                       → INSERT (load_layer='persistent_expire', rows=N)
+                       → INSERT (load_layer='persistent_insert', rows=N)
+5. T2 child succeeds   → UPDATE control table (status='SUCCESS', watermark updated)
+6. T4 SP executes      → INSERT (load_layer='presentation', rows=N)
+```
+
+**Error message sanitisation:** Pipeline expressions strip single quotes from error messages before embedding them in SQL strings to prevent injection: `@replace(error.message, '''', '')`.
+
+**Email alerts:** T1 child pipelines send Office365 email alerts on truncate or copy failures with full context (pipeline name, table, job ID, offset at failure, error message).
+
+### Per-table API overrides via `api_query_suffix`
+
+For source APIs with per-table quirks (e.g. column restrictions, custom filters), store the override in the control table rather than branching pipeline logic. The suffix is appended to the API URL before pagination parameters:
+
+```
+URL without suffix: GET /table/{src_table_name}?$orderby=id&$top={page_size}&$skip={offset}
+URL with suffix:    GET /table/{src_table_name}{api_query_suffix}&$orderby=id&$top={page_size}&$skip={offset}
+```
+
+**Windowed load suffix example:** For tables using a rolling window, the `api_query_suffix` includes a date filter:
+
+```
+?$filter=starttime>='{calculated_date}'
+```
+
+The parent pipeline calculates the date from `rolling_days` and passes it as a parameter.
 
 ---
 

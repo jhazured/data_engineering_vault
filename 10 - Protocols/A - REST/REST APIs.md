@@ -300,7 +300,7 @@ When consuming OData APIs (common in Microsoft/SAP ecosystems) with `$top`/`$ski
 **Offset drift on unsorted endpoints:** If the API does not guarantee a stable sort order, rows can shift between pages mid-extraction — causing duplicates or missed records. Always add `$orderby={table}.id` (or another unique, immutable column) to enforce deterministic pagination:
 
 ```
-GET /table/service_schedule?$filter=...&$orderby=service_schedule.id&$top=10000&$skip=0
+GET /table/orders?$filter=...&$orderby=orders.id&$top=10000&$skip=0
 ```
 
 **Natural last-page detection:** Many OData endpoints do not return `@odata.count` or `@odata.nextLink`. The only reliable exit signal is when the response contains fewer rows than `$top` (or an empty set for exact multiples):

@@ -237,7 +237,7 @@ Add a `rolling_days` column to your pipeline control table:
 ```sql
 -- Control table row for a windowed table
 INSERT INTO control.pipeline_control (table_name, load_type, rolling_days, ...)
-VALUES ('service_schedule', 'windowed', 90, ...);
+VALUES ('orders', 'windowed', 90, ...);
 -- Initial load: set rolling_days = 3650 (10 years) to pull full history
 -- BAU runs: set rolling_days = 90
 ```

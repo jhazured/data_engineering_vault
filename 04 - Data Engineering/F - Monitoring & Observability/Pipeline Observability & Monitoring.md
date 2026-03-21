@@ -955,6 +955,212 @@ END;
 
 ---
 
+## Fabric Warehouse Monitoring Views (T0-T4)
+
+The T0-T5 architecture supports a **view-per-concern** monitoring pattern — dedicated SQL views at each layer that can be queried directly, composed into dashboards, or used as alert sources. These views require no external tooling; they run against the same Fabric Warehouse that hosts the data.
+
+### View Catalogue
+
+| Layer | View | Purpose |
+|-------|------|---------|
+| **T0** | `audit.vw_latest_run_status` | One row per table — most recent pipeline outcome |
+| **T0** | `audit.vw_recent_failures` | All FAILED records for investigation |
+| **T0** | `audit.vw_layer_reconciliation` | Cross-layer row count diffs (T1 → T2 → T3 → T4) |
+| **T0** | `control.vw_pipeline_control_state` | Current control table state (is_active, do_not_load, watermarks) |
+| **T1** | `{schema}.vw_record_counts` | Row counts per T1 transient table |
+| **T1** | `{schema}.vw_data_freshness` | Latest `etl_loaded_at` and minutes since load per table |
+| **T2** | `{schema}.vw_record_counts` | Row counts per T2 persistent table |
+| **T2** | `{schema}.vw_data_freshness` | Latest `etl_start_time` and minutes since load |
+| **T2** | `{schema}.vw_scd2_health` | Orphaned historical rows, NULL PKs, deleted %, merge recency |
+| **T3** | `{schema}.vw_data_quality` | NULL counts on key fields, bad date detection, missing FKs |
+| **T4** | `presentation.vw_referential_integrity` | Fact rows with NULL surrogate keys per dimension |
+| **T4** | `presentation.vw_dim_coverage` | Matched vs missing dimension keys with coverage percentage |
+
+### Pattern 1: Latest Run Status (T0)
+
+Shows the most recent outcome per table, filtering out `persistent_begin` markers (which are just "RUNNING" placeholders):
+
+```sql
+CREATE VIEW audit.vw_latest_run_status AS
+WITH ranked AS (
+    SELECT
+        pipeline_name, table_name, load_layer,
+        rows_loaded, run_status, error_message,
+        start_time, loaded_at,
+        ROW_NUMBER() OVER (
+            PARTITION BY pipeline_name, table_name
+            ORDER BY loaded_at DESC
+        ) AS rn
+    FROM audit.pipeline_run_log
+    WHERE load_layer <> 'persistent_begin'
+)
+SELECT pipeline_name, table_name, load_layer,
+       rows_loaded, run_status, error_message,
+       start_time, loaded_at
+FROM ranked
+WHERE rn = 1;
+```
+
+**Use case:** Quick health check — "did everything succeed on the last run?" Filter on `run_status = 'FAILED'` for immediate investigation targets.
+
+### Pattern 2: Cross-Layer Reconciliation (T0)
+
+Compares row counts across all four layers to detect data loss or inflation between tiers:
+
+```sql
+CREATE VIEW audit.vw_layer_reconciliation AS
+SELECT
+    t1.table_name,
+    t1.t1_rows,
+    t2.t2_current_rows,       -- only etl_is_current=1 AND etl_is_deleted=0
+    t3.t3_rows,
+    t4.t4_rows,
+    t2.t2_current_rows - t1.t1_rows AS t1_to_t2_diff,
+    t3.t3_rows - t2.t2_current_rows AS t2_to_t3_diff,
+    t4.t4_rows - t3.t3_rows AS t3_to_t4_diff
+FROM (
+    SELECT '{table}' AS table_name, COUNT(*) AS t1_rows
+    FROM [T1_transient].[{schema}].[{table}]
+    UNION ALL ...
+) t1
+LEFT JOIN (
+    SELECT '{table}' AS table_name,
+        SUM(CASE WHEN etl_is_current = 1 AND etl_is_deleted = 0
+            THEN 1 ELSE 0 END) AS t2_current_rows
+    FROM [T2_persistent].[{schema}].[{table}]
+    UNION ALL ...
+) t2 ON t1.table_name = t2.table_name
+LEFT JOIN (...) t3 ON t1.table_name = t3.table_name
+LEFT JOIN (...) t4 ON t1.table_name = t4.table_name;
+```
+
+**What to watch for:**
+- `t1_to_t2_diff > 0` — T2 has more current rows than T1 delivered. Normal for incremental/windowed loads (T1 only contains the latest window, but T2 has accumulated history). Unexpected for snapshot tables.
+- `t2_to_t3_diff <> 0` — T3 should mirror T2 current rows exactly (T3 sources `WHERE etl_is_current = 1`). Any difference indicates a stale T3 refresh.
+- `t3_to_t4_diff <> 0` — T4 dims should match T3 row counts (TRUNCATE+INSERT). Facts may differ due to JOIN filtering.
+
+### Pattern 3: Data Freshness Per Layer
+
+Each layer has its own freshness view using the same structure — `MAX(etl_loaded_at)` with `DATEDIFF(MINUTE, ...)`:
+
+```sql
+CREATE VIEW [{schema}].[vw_data_freshness] AS
+SELECT 'orders' AS table_name,
+    MAX(etl_loaded_at) AS latest_load,
+    DATEDIFF(MINUTE, MAX(etl_loaded_at), GETUTCDATE()) AS minutes_since_load,
+    COUNT(*) AS row_count
+FROM {schema}.orders
+UNION ALL
+-- ... repeat per table
+```
+
+**Freshness varies by layer:**
+- **T1** — should be near-zero after a pipeline run (truncated and reloaded)
+- **T2** — `etl_start_time` on current rows reflects the last merge timestamp
+- **T3** — reflects the last integration SP execution
+- **T4** — reflects the last dim/fact load
+
+**Alert threshold:** If `minutes_since_load` exceeds 2x the expected schedule interval, investigate.
+
+### Pattern 4: Data Quality Checks (T3)
+
+T3 is the right layer for quality checks because type casting and business logic have been applied but the data hasn't been reshaped into star schema yet:
+
+```sql
+CREATE VIEW [{schema}].[vw_data_quality] AS
+SELECT 'orders' AS table_name,
+    COUNT(*) AS total_rows,
+    SUM(CASE WHEN name IS NULL THEN 1 ELSE 0 END) AS null_name,
+    NULL AS null_code,
+    SUM(CASE WHEN order_date IS NULL THEN 1 ELSE 0 END) AS null_order_date,
+    NULL AS bad_date_rows,
+    SUM(CASE WHEN customer_id IS NULL THEN 1 ELSE 0 END) AS null_fk
+FROM {schema}.orders
+UNION ALL
+SELECT 'order_lines',
+    COUNT(*),
+    SUM(CASE WHEN product_name IS NULL THEN 1 ELSE 0 END),
+    NULL,
+    SUM(CASE WHEN ship_date IS NULL THEN 1 ELSE 0 END),
+    -- Detect source system default dates (1900-01-01) that indicate missing data
+    SUM(CASE WHEN ship_date = '1900-01-01' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN order_id IS NULL OR product_id IS NULL THEN 1 ELSE 0 END)
+FROM {schema}.order_lines
+UNION ALL ...
+```
+
+**Design decisions:**
+- Columns are **table-specific** — `null_order_date` is only relevant to date-bearing tables, so other tables return NULL for that column
+- **Bad date detection** catches source system defaults (e.g. `1900-01-01`) that survived the T3 `TRY_CAST` transformation
+- **Foreign key checks** (`null_fk`) flag rows where expected relationships are missing before they cause NULL surrogate keys in T4
+
+### Pattern 5: Referential Integrity (T4)
+
+After T4 loads dims and facts with surrogate key lookups, this view checks how many fact rows have NULL keys — meaning the dimension lookup failed:
+
+```sql
+CREATE VIEW presentation.vw_referential_integrity AS
+SELECT 'fact_orders' AS table_name,
+    COUNT(*) AS total_rows,
+    SUM(CASE WHEN date_key IS NULL THEN 1 ELSE 0 END) AS null_date_key,
+    SUM(CASE WHEN customer_key IS NULL THEN 1 ELSE 0 END) AS null_customer_key,
+    SUM(CASE WHEN product_key IS NULL THEN 1 ELSE 0 END) AS null_product_key,
+    NULL AS null_employee_key
+FROM presentation.fact_orders
+UNION ALL ...
+```
+
+**Companion view — dimension coverage with percentage:**
+
+```sql
+CREATE VIEW presentation.vw_dim_coverage AS
+SELECT 'fact_orders' AS fact_table,
+    'dim_customer' AS dimension,
+    COUNT(*) AS total_rows,
+    SUM(CASE WHEN customer_key IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows,
+    SUM(CASE WHEN customer_key IS NULL THEN 1 ELSE 0 END) AS missing_rows,
+    CAST(SUM(CASE WHEN customer_key IS NULL THEN 1.0 ELSE 0 END)
+        / NULLIF(COUNT(*), 0) * 100 AS DECIMAL(5,2)) AS missing_pct
+FROM presentation.fact_orders
+UNION ALL ...
+```
+
+**Alert thresholds:**
+- `missing_pct > 0%` on `dim_date` — should never happen if `dim_date` covers the full date range
+- `missing_pct > 5%` on business dimensions — indicates data gaps in the source or timing issues in the dim load order
+
+### SCD2 Health Check (T2)
+
+See [[SCD Type 2 Patterns#SCD2 Health Check View]] for the `vw_scd2_health` view that monitors orphaned historical rows, NULL PKs, deleted percentage, and merge recency.
+
+### Composing a Morning Health Check
+
+Query all monitoring views in sequence for a daily operational check:
+
+```sql
+-- 1. Any failures since last check?
+SELECT * FROM [T0_control].audit.vw_recent_failures
+WHERE loaded_at >= DATEADD(HOUR, -12, GETUTCDATE());
+
+-- 2. All tables green?
+SELECT * FROM [T0_control].audit.vw_latest_run_status
+WHERE run_status <> 'SUCCESS';
+
+-- 3. Cross-layer alignment?
+SELECT * FROM [T0_control].audit.vw_layer_reconciliation
+WHERE t2_to_t3_diff <> 0 OR t3_to_t4_diff <> 0;
+
+-- 4. Data quality issues?
+SELECT * FROM [T3_integration].{schema}.vw_data_quality
+WHERE null_fk > 0 OR bad_date_rows > 0;
+
+-- 5. Referential integrity?
+SELECT * FROM [T4_presentation].presentation.vw_dim_coverage
+WHERE missing_pct > 0;
+```
+
+---
+
 ## Pipeline SLO Definition Patterns
 
 Service Level Objectives (SLOs) formalise what "good" looks like for a data pipeline. While SLAs are contractual commitments to stakeholders, SLOs are internal engineering targets that the monitoring system enforces. Define SLOs across three dimensions: **latency**, **freshness**, and **completeness**.
@@ -1054,5 +1260,10 @@ Track error budget burn rate. If 50% of the monthly budget is consumed in the fi
 - [ ] Uptime checks for pipeline API endpoints
 - [ ] Fabric T0 pipeline execution logging (start, success, failure)
 - [ ] Performance instrumentation within stored procedures
+- [ ] Fabric monitoring views: latest run status, cross-layer reconciliation, data freshness per layer
+- [ ] T3 data quality views: NULL counts on key fields, bad date detection, missing FK checks
+- [ ] T4 referential integrity and dimension coverage views with missing_pct alerting
+- [ ] SCD2 health check view: orphaned historical rows, NULL PKs, deleted percentage
+- [ ] Composable morning health check query across all monitoring views
 - [ ] Pipeline SLOs defined for latency, freshness, and completeness
 - [ ] Error budget tracking with burn-rate alerting

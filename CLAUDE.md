@@ -61,6 +61,7 @@ These projects at `/home/jhark/workspace/` have been reviewed and extracted into
 | `logistics-analytics-platform` | dbt patterns, Fivetran, Snowflake cost/streaming/RBAC, data lineage, macros |
 | `US-flights-data-pipeline` | Snowflake JS stored procs, star schema DDL, incremental loading |
 | `data-engineering-books` | Spark, Hadoop, Kafka, DDIA, Kimball, Airflow, Databricks (2025), AWS DEA |
+| `fabric-logistics-warehouse` | Fabric T-SQL SCD2 MERGE, metadata-driven pipeline orchestration, monitoring views (T0-T4), API pagination patterns, star schema load SPs, OLS/RLS security |
 
 ## Working With This Vault
 

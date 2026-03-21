@@ -456,6 +456,131 @@ The `last_watermark` variable is supplied by the orchestrator (e.g., Airflow XCo
 
 ---
 
+## 9 -- REST API Ingestion Patterns (Data Factory / Fabric)
+
+When the source is a REST API rather than a database or file, ingestion requires pagination, rate-limit handling, and load-strategy decisions that don't apply to batch sources. These patterns are implemented as Data Factory (or Fabric) pipelines using Copy activities inside `Until` loops, driven by a control table.
+
+See [[Microsoft Fabric & Azure Data Services#Control Table-Driven Pipeline Orchestration]] for the full metadata-driven pipeline architecture.
+
+### Three Load Strategies
+
+| Strategy | When to Use | T1 Behaviour | SCD2 Soft Deletes? |
+|----------|-------------|-------------|:------------------:|
+| **Snapshot** | Source returns complete dataset; small-to-medium tables (reference data, master data) | Truncate → full reload every run | Yes — absence = deletion |
+| **Windowed** | Large tables with a date field; need recent history but not full reload | Truncate → load rolling N-day window (e.g. 90 days) | No — partial dataset |
+| **Incremental** | Initial history load or CDC via `modifiedon` watermark | Append only — watermark advances each run | No — partial dataset |
+
+**Key insight:** The same pipeline child template handles all three — only the URL construction and truncate behaviour differ, controlled by `load_type` in the control table.
+
+### Offset-Based Pagination (OData-style)
+
+For APIs that support `$top` / `$skip` / `$orderby` (OData convention), use an `Until` loop that terminates when the returned row count is less than the page size:
+
+```
+Until: v_row_count < p_page_size
+│
+├── [Copy Activity: copy_api_to_t1]
+│   Source: GET /table/{entity}?$orderby=id&$top={page_size}&$skip={offset}
+│   Sink:   Fabric Warehouse table (append)
+│   Retry:  3 attempts, 30-second intervals
+│
+├── v_row_count   = copy_api_to_t1.output.rowsCopied
+├── v_total_rows += v_row_count        (via temp variable swap)
+└── v_offset     += p_page_size        (via temp variable swap)
+```
+
+**Why `$orderby` matters:** Without a stable sort order, the API may return overlapping or missing rows across pages. Always order by a unique, immutable column (e.g., `id`).
+
+**Termination condition:** `v_row_count < p_page_size` catches both partial pages (fewer rows than requested) and empty responses (zero rows). For APIs that return exact multiples of page_size, the next iteration will return 0 rows and terminate.
+
+**Variable self-assignment workaround:** Fabric pipelines cannot self-assign a variable (`v_offset = v_offset + page_size` is not allowed). Use a temp-variable swap:
+
+```
+v_offset_temp = v_offset + p_page_size    -- calculate into temp
+v_offset      = v_offset_temp             -- swap back
+```
+
+### Snapshot Pattern (Full Reload)
+
+```
+API URL: /table/{entity}?$orderby={entity}.id&$top={page_size}&$skip={offset}
+```
+
+- **Before pagination:** `TRUNCATE TABLE [schema].[table]` — T1 is completely replaced each run
+- **Page size:** Larger (e.g. 20,000) since the full dataset is read every time
+- **After success:** T2 snapshot merge runs (includes soft deletes for absent records)
+- **Schedule:** Typically 2x daily (e.g. 4:00 AM and 11:00 AM)
+
+### Windowed Pattern (Rolling Date Range)
+
+```
+API URL: /table/{entity}?$filter=starttime>='{calculated_date}'&$orderby={entity}.id&$top={page_size}&$skip={offset}
+```
+
+- **Before pagination:** `TRUNCATE TABLE [schema].[table]` — old window data is replaced
+- **Date calculation:** `today - rolling_days` from control table (e.g. 90 days for BAU, 3650 for initial load)
+- **Page size:** Smaller (e.g. 10,000) since windowed data may be larger per page
+- **After success:** T2 incremental merge runs (no soft deletes — windowed data is partial)
+- **Use case:** Large transactional tables where full reload is too expensive but you need recent history refreshed
+
+### Incremental Pattern (Watermark-Based)
+
+```
+API URL: /table/{entity}?$filter=modifiedon>'{last_watermark}'&$orderby={entity}.id&$top={page_size}&$skip={offset}
+```
+
+- **No truncate** — T1 is appended to (only new/changed records since last watermark)
+- **Watermark source:** `last_watermark_ts` from control table, initialised to `1900-01-01` for first run
+- **After success:** T2 incremental merge runs; watermark updated to current timestamp
+- **Transition:** After the initial full history load completes, switch the table's `load_type` from `incremental` to `windowed` for BAU operations
+
+### Per-Table API Query Overrides
+
+Some APIs need table-specific query parameters (column filters, custom predicates). Store these in the control table's `api_query_suffix` column rather than branching pipeline logic:
+
+```
+-- Control table row:
+api_query_suffix = '?$filter=starttime>=''2025-01-01'''
+
+-- Pipeline URL construction:
+/table/{src_table_name}{api_query_suffix}&$orderby=id&$top={page_size}&$skip={offset}
+
+-- If api_query_suffix is NULL or empty:
+/table/{src_table_name}?$orderby=id&$top={page_size}&$skip={offset}
+```
+
+The child pipeline handles the `?` vs `&` delimiter dynamically based on whether the suffix is present.
+
+### Column Mapping via Control Table
+
+The Copy activity's `translator` property accepts a JSON column mapping. Storing this in the control table (`column_mapping_json`) means no pipeline changes when the source schema evolves — just update the JSON:
+
+```json
+{
+  "type": "TabularTranslator",
+  "mappings": [
+    {"source": {"path": "$['id']"},       "sink": {"name": "id"}},
+    {"source": {"path": "$['name']"},     "sink": {"name": "name"}},
+    {"source": {"path": "$['groupid']"},  "sink": {"name": "groupid"}}
+  ]
+}
+```
+
+This also serves as the source of truth for which columns are included in the hash for SCD2 change detection.
+
+### Page Size Tuning
+
+| Factor | Guidance |
+|--------|----------|
+| API rate limits | Larger pages = fewer calls. Match the API's maximum. |
+| Response time | If pages take >30 seconds, reduce page size to avoid timeouts |
+| Memory pressure | Fabric Copy activity stages through ADLS — large pages increase staging file size |
+| Retry cost | On failure, only the current page is retried (3x with 30-second backoff) |
+
+**Typical values:** 20,000 for snapshot (small reference tables), 10,000 for windowed (larger transactional data).
+
+---
+
 ## Framework Orchestration Flow
 
 The `ETLProcessor` in `framework/etl.py` ties everything together in a three-phase pipeline:

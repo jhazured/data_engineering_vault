@@ -445,3 +445,43 @@ What each section needs to reach a perfect score. Items marked with effort estim
 | 47 | gRPC & GraphQL | `10/D` |
 | 48 | DuckDB for Data Engineering | `06/G` |
 | 49 | Common Data Engineering Patterns | `02/A` |
+
+---
+
+## Pending Extraction: fabric-logistics-warehouse
+
+> Source: `/home/jhark/workspace/fabric-logistics-warehouse/`
+> Status: **Extracted** — completed 2026-03-21 (5 of 6 items; #4 skipped — client-specific)
+> Project: Microsoft Fabric warehouse — 5-tier architecture, 96 SQL files, 15 pipelines
+
+### What the project contains
+
+- **5-tier medallion variant** (T0 control → T1 transient → T2 persistent/SCD2 → T3 integration → T4 star schema)
+- **Metadata-driven pipelines** — single `pipeline_control` table drives all 7 source tables across 3 load patterns (snapshot, windowed, incremental)
+- **T-SQL SCD2 MERGE** with hash-based change detection, soft deletes (snapshot only), and `etl_is_current`/`etl_is_deleted`/`etl_hash` tracking columns
+- **Parent/child pipeline orchestration** — master pipeline calls T1→T2→T3→T4 sequentially; each tier uses parent/child pattern with ForEach loops
+- **12 monitoring views** across all layers (freshness, reconciliation, SCD2 health, referential integrity, dim coverage)
+- **Star schema** — 5 dimensions + 3 facts with TRUNCATE+INSERT load via security-schema SPs, OLS/RLS placeholders
+- **API pagination patterns** — offset-based with `$top`/`$skip`/`$filter`/`$orderby` for OData-style REST API
+
+### Extraction plan (7 updates)
+
+| # | Target Note | What Added | Status |
+|---|-------------|------------|--------|
+| 1 | `04/D - Transformation/SCD Type 2 Patterns.md` | T-SQL MERGE SCD2: incremental + snapshot SPs, hash change detection, ETL tracking columns | Done |
+| 2 | `03/B - Azure/Microsoft Fabric & Azure Data Services.md` | Metadata-driven pipeline orchestration: control table, parent/child hierarchy, audit logging, SP routing | Done |
+| 3 | `04/F - Monitoring/Pipeline Observability & Monitoring.md` | Fabric monitoring views: cross-layer reconciliation, SCD2 health, data freshness, referential integrity | Done |
+| 4 | `02/C - Reference Architectures/Azure Fabric Reference Architecture.md` | Client-specific case study | Skipped |
+| 5 | `02/B - ETL vs ELT Workflows/ETL Pipeline Templates & Patterns.md` | REST API pagination: OData `$top`/`$skip`/`$filter`, snapshot/windowed/incremental strategies | Done |
+| 6 | `09/A - ERDs/Star Schema Implementation Patterns.md` | Fabric dim/fact load: TRUNCATE+INSERT, surrogate key lookups, date dim CTE, OLS/RLS security | Done |
+| 7 | `CLAUDE.md` workspace table | Added `fabric-logistics-warehouse` as extracted project | Done |
+
+### Vault rating impact
+
+| Section | Before | After | Notes |
+|---------|:------:|:-----:|-------|
+| Templates — ETL Workflows | 7/10 | 8/10 | API pagination + load pattern variety |
+| Azure | 9/10 | 9/10 | Deepens existing strength (pipeline orchestration) |
+| Transformation — SCD2 | 9/10 | 10/10 | Adds T-SQL MERGE to complement dbt snapshots |
+| Monitoring | 8/10 | 9/10 | Fabric-specific monitoring views |
+| Star Schema | 9/10 | 9/10 | Deepens with Fabric load SP patterns |

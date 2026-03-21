@@ -290,8 +290,208 @@ The Fabric wiki maintains 12 ADRs covering ingestion, transformations, SCD2, VAR
 
 ---
 
+## 11. Implementation in Microsoft Fabric Warehouse
+
+### TRUNCATE + INSERT Load Pattern
+
+Fabric Warehouse star schemas use a **full reload** pattern for presentation layer tables rather than MERGE. Each dim/fact has a dedicated stored procedure that truncates the target and inserts from the T3 integration layer:
+
+```sql
+CREATE OR ALTER PROCEDURE [presentation].[usp_load_dim_customer]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    TRUNCATE TABLE [T4_presentation].[presentation].[dim_customer];
+
+    INSERT INTO [T4_presentation].[presentation].[dim_customer]
+    (
+        customer_id, first_name, last_name, customer_name,
+        location_key, location_id,                    -- surrogate + natural key
+        is_active, start_date, end_date, etl_loaded_at
+    )
+    SELECT
+        c.id, c.first_name, c.last_name, c.name,
+        dl.location_key,                              -- surrogate key lookup
+        c.location_id,                                -- natural key preserved
+        CASE WHEN c.inactive = 1 THEN 0 ELSE 1 END,  -- business logic
+        c.start_date, c.end_date, SYSUTCDATETIME()
+    FROM [T3_integration].[{schema}].[customer] c
+    LEFT JOIN [T4_presentation].[presentation].[dim_location] dl
+        ON c.location_id = dl.location_id;
+END;
+```
+
+**Why TRUNCATE + INSERT instead of MERGE?**
+- Dimensions are small (thousands of rows) — full reload is fast and simple
+- Eliminates complexity of detecting deletes
+- `IDENTITY` surrogate keys reset naturally (Fabric IDENTITY continues from the max value after truncate, not from 1 — but this is acceptable since surrogate keys are meaningless outside the session)
+- Facts use the same pattern because T3 already filters to current rows only
+
+### Surrogate Key Lookups in Fact Loads
+
+Fact load procedures join to dimension tables to resolve natural keys to surrogate keys:
+
+```sql
+CREATE OR ALTER PROCEDURE [presentation].[usp_load_fact_orders]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    TRUNCATE TABLE [T4_presentation].[presentation].[fact_orders];
+
+    INSERT INTO [T4_presentation].[presentation].[fact_orders]
+    (
+        order_id,
+        date_key, employee_key, product_key,              -- surrogate FKs
+        invoice_number, line_item_id,                      -- degenerate dims
+        order_date, ship_date, quantity, total_amount,
+        is_zero_quantity, is_approved, etl_loaded_at
+    )
+    SELECT
+        o.id,
+        CAST(FORMAT(o.order_date, 'yyyyMMdd') AS INT),    -- date_key: YYYYMMDD
+        de.employee_key,                                    -- lookup from dim_employee
+        dp.product_key,                                     -- lookup from dim_product
+        o.invoice_number, o.line_item_id,
+        o.order_date, o.ship_date, o.quantity,
+        o.total_amount,
+        CASE WHEN o.quantity = 0 THEN 1 ELSE 0 END,       -- derived flag
+        o.is_approved, SYSUTCDATETIME()
+    FROM [T3_integration].[{schema}].[orders] o
+    LEFT JOIN [T4_presentation].[presentation].[dim_employee] de
+        ON o.employee_id = de.employee_id
+    LEFT JOIN [T4_presentation].[presentation].[dim_product] dp
+        ON o.product_id = dp.product_id;
+END;
+```
+
+**Design decisions:**
+- **LEFT JOIN** to dimensions — if a dimension record is missing, the fact row still loads with a NULL surrogate key (caught by `vw_referential_integrity`)
+- **`date_key` as `YYYYMMDD` integer** — `CAST(FORMAT(order_date, 'yyyyMMdd') AS INT)` produces a compact, sortable key that joins to `dim_date.date_key`
+- **Degenerate dimensions** — `invoice_number` and `line_item_id` are natural keys stored directly on the fact (no separate dimension table)
+- **Derived columns** — `is_zero_quantity`, `day_name`, `order_time_hhmm` are computed during the load rather than in BI tool measures
+
+### Date Dimension Generation (Recursive CTE)
+
+The date dimension is self-generated via a recursive CTE with `OPTION (MAXRECURSION 0)`:
+
+```sql
+CREATE OR ALTER PROCEDURE [presentation].[usp_load_dim_date]
+    @start_date DATE = '2015-01-01',
+    @end_date   DATE = '2040-12-31'
+AS
+BEGIN
+    SET NOCOUNT ON;
+    TRUNCATE TABLE [T4_presentation].[presentation].[dim_date];
+
+    ;WITH dates AS (
+        SELECT @start_date AS dt
+        UNION ALL
+        SELECT DATEADD(DAY, 1, dt) FROM dates WHERE dt < @end_date
+    )
+    INSERT INTO [T4_presentation].[presentation].[dim_date]
+        (date_key, full_date, year, quarter, month, month_name,
+         day_of_week, day_name, week_of_year, is_weekend,
+         fiscal_year, fiscal_quarter, year_month)
+    SELECT
+        CAST(FORMAT(dt, 'yyyyMMdd') AS INT),           -- YYYYMMDD integer key
+        dt,
+        YEAR(dt), DATEPART(QUARTER, dt), MONTH(dt),
+        DATENAME(MONTH, dt),
+        (DATEPART(WEEKDAY, dt) + 5) % 7 + 1,          -- 1=Monday, 7=Sunday
+        DATENAME(WEEKDAY, dt),
+        DATEPART(ISO_WEEK, dt),
+        CASE WHEN DATEPART(WEEKDAY, dt) IN (1, 7) THEN 1 ELSE 0 END,
+        -- Australian fiscal year: Jul-Jun
+        CASE WHEN MONTH(dt) >= 7 THEN YEAR(dt) + 1 ELSE YEAR(dt) END,
+        CASE
+            WHEN MONTH(dt) IN (7,8,9)   THEN 1
+            WHEN MONTH(dt) IN (10,11,12) THEN 2
+            WHEN MONTH(dt) IN (1,2,3)    THEN 3
+            ELSE 4
+        END,
+        FORMAT(dt, 'yyyy-MM')
+    FROM dates
+    OPTION (MAXRECURSION 0);                           -- allow 25+ years of rows
+END;
+```
+
+**Fiscal calendar note:** The Australian fiscal year runs July–June, so `MONTH(dt) >= 7` maps to FY+1. Adjust the CASE expression for different fiscal calendars.
+
+### Load Order (Dims Before Facts)
+
+The T4 pipeline loads tables in dependency order — dimensions first, then facts that reference them:
+
+```
+1. dim_date            ← independent (run once on first deployment)
+2. dim_location        ← independent
+3. dim_product         ← independent
+4. dim_customer        ← depends on dim_location (location_key lookup)
+5. dim_employee        ← depends on dim_location (default_location_id)
+6. fact_orders         ← depends on dim_location, dim_product, dim_date
+7. fact_order_lines    ← depends on dim_employee, dim_date
+8. fact_timesheets     ← depends on dim_employee, dim_product, dim_date
+```
+
+The T4 parent pipeline calls each SP sequentially to enforce this order. Dims could be parallelised (steps 2–5) but sequential execution is simpler and fast enough for small dimension tables.
+
+### Security Schema Pattern (OLS + RLS)
+
+Load procedures are placed in a `security` schema to restrict day-to-day access — users query the `presentation` schema tables but cannot execute the load SPs directly.
+
+**Object-Level Security (OLS)** restricts column access via `GRANT`/`DENY`:
+
+```sql
+-- Standard readers: deny access to sensitive columns
+GRANT SELECT ON [presentation].[dim_employee] TO [StandardReader];
+DENY SELECT ON [presentation].[dim_employee]
+    ([payroll_id], [hourly_rate], [pay_level]) TO [StandardReader];
+
+-- Payroll readers: full access including sensitive columns
+GRANT SELECT ON [presentation].[dim_employee] TO [PayrollReader];
+```
+
+**Row-Level Security (RLS)** filters rows by location/region via an Entra group mapping table:
+
+```sql
+-- Mapping table: Entra group → location access
+CREATE TABLE presentation.rls_user_location_map (
+    entra_group_id  NVARCHAR(100) NOT NULL,  -- Entra group GUID
+    location_id     VARCHAR(100)  NOT NULL,   -- FK to dim_location
+    is_admin        BIT           NOT NULL DEFAULT 0  -- 1 = sees all locations
+);
+
+-- Predicate function using IS_MEMBER()
+CREATE FUNCTION presentation.fn_rls_location_filter(@location_id VARCHAR(100))
+RETURNS TABLE WITH SCHEMABINDING
+AS RETURN
+    SELECT 1 AS result
+    WHERE EXISTS (
+        SELECT 1 FROM presentation.rls_user_location_map m
+        WHERE m.is_admin = 1 AND IS_MEMBER(m.entra_group_id) = 1
+    )
+    OR EXISTS (
+        SELECT 1 FROM presentation.rls_user_location_map m
+        WHERE m.location_id = @location_id AND IS_MEMBER(m.entra_group_id) = 1
+    );
+
+-- Apply to location-scoped tables; cascades via Power BI relationships
+CREATE SECURITY POLICY presentation.policy_rls_location
+    ADD FILTER PREDICATE presentation.fn_rls_location_filter(location_id)
+        ON presentation.dim_location,
+    ADD FILTER PREDICATE presentation.fn_rls_location_filter(location_id)
+        ON presentation.dim_customer
+WITH (STATE = ON);
+```
+
+**RLS cascading:** Applying the filter only to `dim_location` and `dim_customer` is sufficient — Power BI's single-direction cross-filter relationships propagate the location filter from dims to facts automatically.
+
+---
+
 ## Related Notes
 
 - [[Dimensional Modelling (Kimball)]] — four-step design process, bus architecture
 - [[SCD Type 2 Patterns]] — MERGE-based SCD2, dbt snapshots
 - [[Snowflake SQL Pipeline Patterns]] — pipeline orchestration, MERGE patterns
+- [[Microsoft Fabric & Azure Data Services]] — pipeline orchestration, T0-T5 architecture
